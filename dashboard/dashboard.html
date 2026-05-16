@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Propello AI — Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300;0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#F5F5F4;
+  --surface:#FFFFFF;
+  --surface2:#FAFAF9;
+  --surface3:#F2F2F0;
+  --border:#E5E5E2;
+  --border2:#D1D1CE;
+  --text1:#141412;
+  --text2:#6B6B67;
+  --text3:#A8A8A4;
+  --accent:#141412;
+  --accent-sub:rgba(20,20,18,0.06);
+  --hot:#C62828;--hot-bg:#FDF2F2;--hot-br:#F5C6C6;
+  --warm:#A16207;--warm-bg:#FDFAF0;--warm-br:#F0E0A0;
+  --cold:#1D4ED8;--cold-bg:#F0F4FE;--cold-br:#C3D3FB;
+  --green:#15803D;--green-bg:#F0FDF4;
+  --font:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+  --mono:'JetBrains Mono','SF Mono','Courier New',monospace;
+  --r:6px;--r2:8px;--r3:12px;
+  --sh:0 1px 2px rgba(0,0,0,0.04),0 1px 4px rgba(0,0,0,0.03);
+  --sh2:0 4px 16px rgba(0,0,0,0.08),0 2px 6px rgba(0,0,0,0.04);
+}
+html,body{height:100%;overflow:hidden;background:var(--bg)}
+body{font-family:var(--font);font-size:13px;color:var(--text1);-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+.app{display:grid;grid-template-columns:236px 1fr;height:100vh}
+
+/* ── SIDEBAR ─────────────────────────── */
+.sidebar{background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+.sb-top{padding:20px 16px 16px;border-bottom:1px solid var(--border)}
+.brand{display:flex;align-items:center;gap:10px}
+.brand-mark{width:30px;height:30px;background:var(--text1);border-radius:7px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.brand-mark i{font-size:15px;color:#fff}
+.brand-text{}
+.brand-name{font-size:14.5px;font-weight:700;color:var(--text1);letter-spacing:-0.3px;line-height:1.1}
+.brand-tag{font-size:10px;color:var(--text3);font-family:var(--mono);letter-spacing:0.05em;margin-top:2px}
+.sb-nav{flex:1;padding:10px 8px;overflow-y:auto}
+.nav-grp{font-size:9.5px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;letter-spacing:0.1em;padding:12px 8px 4px;font-weight:500}
+.nav-btn{width:100%;display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:var(--r);border:none;background:transparent;cursor:pointer;color:var(--text2);font-size:12.5px;font-weight:450;font-family:var(--font);transition:background 0.1s,color 0.1s;margin-bottom:1px;text-align:left;position:relative;letter-spacing:-0.1px}
+.nav-btn:hover{background:var(--surface3);color:var(--text1)}
+.nav-btn.active{background:var(--accent-sub);color:var(--text1);font-weight:600}
+.nav-btn.active::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);width:2px;height:14px;background:var(--accent);border-radius:0 2px 2px 0}
+.nav-btn i{font-size:14px;flex-shrink:0;width:16px;opacity:0.65}
+.nav-btn.active i,.nav-btn:hover i{opacity:1}
+.nav-badge{margin-left:auto;background:var(--hot-bg);color:var(--hot);font-size:10px;font-weight:600;padding:1px 6px;border-radius:10px;font-family:var(--mono);border:1px solid var(--hot-br)}
+.sb-foot{padding:10px 8px 16px;border-top:1px solid var(--border)}
+.conn-pill{display:flex;align-items:center;gap:7px;padding:7px 10px;background:var(--surface2);border-radius:var(--r);border:1px solid var(--border)}
+.dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.dot.on{background:var(--green);animation:pulse 2.5s ease-in-out infinite}
+.dot.off{background:var(--hot)}
+.dot.demo{background:var(--text3)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.35}}
+.conn-label{font-size:11px;color:var(--text2);font-family:var(--mono)}
+
+/* ── MAIN ────────────────────────────── */
+.main{display:flex;flex-direction:column;overflow:hidden}
+.topbar{height:52px;min-height:52px;padding:0 22px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.pg-title{font-size:13.5px;font-weight:600;color:var(--text1);letter-spacing:-0.2px}
+.pg-sub{font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:1px}
+.top-right{display:flex;gap:5px;align-items:center}
+.content{flex:1;overflow-y:auto;padding:20px 22px}
+
+/* ── BUTTONS ─────────────────────────── */
+.btn{display:inline-flex;align-items:center;gap:5px;padding:6px 13px;border-radius:var(--r);font-size:12px;font-weight:500;cursor:pointer;border:1px solid transparent;font-family:var(--font);transition:all 0.1s;white-space:nowrap;letter-spacing:-0.1px;line-height:1}
+.btn-primary{background:var(--text1);color:#fff;border-color:var(--text1)}
+.btn-primary:hover{background:#2a2a28}
+.btn-ghost{background:transparent;color:var(--text2);border-color:var(--border2)}
+.btn-ghost:hover{background:var(--surface3);color:var(--text1)}
+.btn-danger{background:var(--hot-bg);color:var(--hot);border-color:var(--hot-br)}
+.btn-danger:hover{background:#FAE0E0}
+.btn-sm{padding:5px 10px;font-size:11px}
+.btn:disabled{opacity:0.38;cursor:not-allowed}
+.btn i{font-size:13px}
+
+/* ── CARDS ───────────────────────────── */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);box-shadow:var(--sh)}
+.card-hd{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:10px}
+.card-title{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--text3)}
+.card-bd{padding:16px}
+
+/* ── STAT CARDS ──────────────────────── */
+.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);padding:16px 18px;box-shadow:var(--sh);transition:box-shadow 0.15s,transform 0.15s}
+.stat:hover{box-shadow:var(--sh2);transform:translateY(-1px)}
+.stat-label{font-size:10px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;font-weight:500}
+.stat-val{font-size:28px;font-weight:700;font-family:var(--mono);color:var(--text1);line-height:1;letter-spacing:-1.5px}
+.stat-meta{font-size:11px;color:var(--text3);margin-top:4px;font-family:var(--mono)}
+
+/* ── GRID ────────────────────────────── */
+.g2{display:grid;grid-template-columns:196px 1fr;gap:12px;margin-bottom:18px}
+
+/* ── TABLE ───────────────────────────── */
+.tbl-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+thead th{padding:9px 14px;text-align:left;font-size:10px;font-weight:600;color:var(--text3);letter-spacing:0.08em;text-transform:uppercase;border-bottom:1px solid var(--border);background:var(--surface2);font-family:var(--mono);white-space:nowrap}
+tbody tr{cursor:pointer;transition:background 0.08s}
+tbody tr:hover td{background:var(--surface2)}
+tbody td{padding:10px 14px;font-size:12px;color:var(--text2);border-bottom:1px solid var(--border);white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis}
+tbody tr:last-child td{border-bottom:none}
+.td-name{color:var(--text1)!important;font-weight:500}
+
+/* ── BADGES ──────────────────────────── */
+.badge{display:inline-flex;align-items:center;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:600;font-family:var(--mono);letter-spacing:0.04em}
+.b-hot {background:var(--hot-bg);color:var(--hot);border:1px solid var(--hot-br)}
+.b-warm{background:var(--warm-bg);color:var(--warm);border:1px solid var(--warm-br)}
+.b-cold{background:var(--cold-bg);color:var(--cold);border:1px solid var(--cold-br)}
+.b-tag{background:var(--surface3);color:var(--text2);border:1px solid var(--border);font-size:9px;padding:1px 6px}
+
+/* ── SCORE BAR ───────────────────────── */
+.sc-row{display:flex;align-items:center;gap:6px;min-width:96px}
+.sc-n{font-size:11px;font-weight:500;font-family:var(--mono);min-width:22px;color:var(--text2)}
+.sc-bar{flex:1;height:3px;background:var(--surface3);border-radius:2px}
+.sc-fill{height:3px;border-radius:2px}
+
+/* ── FORM ────────────────────────────── */
+.form-field{margin-bottom:13px}
+.form-label{font-size:10.5px;color:var(--text2);font-family:var(--mono);text-transform:uppercase;letter-spacing:0.07em;display:block;margin-bottom:5px;font-weight:600}
+input,textarea,select{background:var(--surface2);border:1px solid var(--border2);color:var(--text1);border-radius:var(--r);padding:8px 11px;font-size:13px;font-family:var(--font);outline:none;width:100%;transition:border-color 0.12s,box-shadow 0.12s;letter-spacing:-0.1px}
+input:focus,textarea:focus,select:focus{border-color:var(--accent);background:var(--surface);box-shadow:0 0 0 3px rgba(20,20,18,0.07)}
+input::placeholder,textarea::placeholder{color:var(--text3)}
+textarea{resize:vertical;min-height:88px;line-height:1.55}
+select option{background:var(--surface)}
+.inp-wrap{position:relative}
+.inp-wrap i{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text3);font-size:13px;pointer-events:none}
+.inp-wrap input{padding-left:31px}
+
+/* ── CHIPS ───────────────────────────── */
+.chips{display:flex;gap:4px;flex-wrap:wrap}
+.chip{padding:4px 11px;border-radius:20px;border:1px solid var(--border);background:var(--surface);color:var(--text3);font-size:11px;font-weight:500;cursor:pointer;font-family:var(--mono);transition:all 0.1s}
+.chip:hover{color:var(--text1);border-color:var(--border2);background:var(--surface3)}
+.chip.c-all{background:var(--surface3);color:var(--text1);border-color:var(--border2)}
+.chip.c-hot{background:var(--hot-bg);color:var(--hot);border-color:var(--hot-br)}
+.chip.c-warm{background:var(--warm-bg);color:var(--warm);border-color:var(--warm-br)}
+.chip.c-cold{background:var(--cold-bg);color:var(--cold);border-color:var(--cold-br)}
+
+/* ── MODAL ───────────────────────────── */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,0.2);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px;backdrop-filter:blur(3px)}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--r3);width:100%;max-width:580px;max-height:90vh;display:flex;flex-direction:column;animation:fade-in 0.16s ease;box-shadow:var(--sh2)}
+@keyframes fade-in{from{opacity:0;transform:translateY(8px) scale(0.98)}to{opacity:1;transform:none}}
+.modal-hd{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;flex-shrink:0;gap:12px}
+.modal-hd-title{font-size:14px;font-weight:600;color:var(--text1);letter-spacing:-0.2px}
+.modal-hd-sub{font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:2px}
+.modal-bd{padding:20px;overflow-y:auto;flex:1}
+.modal-ft{padding:12px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:6px;flex-shrink:0;background:var(--surface2);border-radius:0 0 var(--r3) var(--r3)}
+.x-btn{background:transparent;border:1px solid var(--border);color:var(--text3);width:26px;height:26px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;transition:all 0.1s}
+.x-btn:hover{background:var(--surface3);color:var(--text1);border-color:var(--border2)}
+
+/* ── CHAT ────────────────────────────── */
+.chat-log{display:flex;flex-direction:column;gap:8px}
+.cm{display:flex;flex-direction:column}
+.cm.user{align-items:flex-end}
+.cm.assistant{align-items:flex-start}
+.cb{padding:8px 12px;border-radius:8px;max-width:84%;font-size:12px;line-height:1.6;color:var(--text2)}
+.cm.user .cb{background:var(--surface3);border:1px solid var(--border);border-radius:8px 8px 2px 8px;color:var(--text1)}
+.cm.assistant .cb{background:var(--surface2);border:1px solid var(--border);border-radius:2px 8px 8px 8px}
+.cm-meta{font-size:10px;color:var(--text3);font-family:var(--mono);margin-top:2px}
+
+/* ── PROFILE GRID ────────────────────── */
+.pf-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:14px}
+.pf-item{background:var(--surface2);border-radius:var(--r);padding:9px 12px;border:1px solid var(--border)}
+.pf-key{font-size:9.5px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:3px;font-weight:500}
+.pf-val{font-size:12.5px;font-weight:500;color:var(--text1)}
+
+/* ── TOAST ───────────────────────────── */
+.toast{position:fixed;bottom:18px;right:18px;background:var(--surface);border:1px solid var(--border2);border-radius:var(--r2);padding:10px 15px;display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text1);z-index:200;animation:fade-in 0.16s ease;box-shadow:var(--sh2)}
+.toast.ok i{color:var(--green)}
+.toast.err i{color:var(--hot)}
+
+/* ── MISC ────────────────────────────── */
+@keyframes spin{to{transform:rotate(360deg)}}
+.spinner{width:13px;height:13px;border:1.5px solid var(--border2);border-top-color:var(--text1);border-radius:50%;animation:spin 0.55s linear infinite}
+.empty{text-align:center;padding:44px 20px;color:var(--text3)}
+.empty i{font-size:26px;display:block;margin-bottom:8px;color:var(--border2)}
+.empty p{font-size:12.5px}
+.sect-label{font-size:10px;color:var(--text2);font-family:var(--mono);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:7px;font-weight:600}
+.notice{background:var(--surface2);border:1px solid var(--border);border-radius:var(--r);padding:9px 13px;font-size:12px;color:var(--text2);display:flex;align-items:center;gap:8px;margin-bottom:14px}
+.notice i{color:var(--text3);flex-shrink:0}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+::-webkit-scrollbar-thumb:hover{background:var(--text3)}
+
+/* ── SETTINGS TABS ───────────────────── */
+.stab-bar{display:flex;border-bottom:1px solid var(--border);margin-bottom:20px;gap:0}
+.stab{padding:8px 16px;border:none;background:transparent;font-size:12.5px;font-weight:500;color:var(--text3);font-family:var(--font);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all 0.12s;display:flex;align-items:center;gap:6px;letter-spacing:-0.1px}
+.stab:hover{color:var(--text2)}
+.stab.active{color:var(--text1);border-bottom-color:var(--text1);font-weight:600}
+.stab i{font-size:13px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script>
+const {useState,useEffect,useCallback,useRef,createElement:h} = React;
+
+const DEMO_LEADS = [
+  {id:1,phone:'919876543210',name:'Rahul Sharma',  score:92,label:'HOT', intent:'site_visit',   message_count:8, last_message:new Date(Date.now()-600000).toISOString(),  created_at:new Date(Date.now()-86400000).toISOString()},
+  {id:2,phone:'919845671234',name:'Priya Gupta',   score:67,label:'WARM',intent:'price_inquiry',message_count:5, last_message:new Date(Date.now()-3600000).toISOString(), created_at:new Date(Date.now()-172800000).toISOString()},
+  {id:3,phone:'919123456789',name:'Amit Mehta',    score:28,label:'COLD',intent:'general',       message_count:2, last_message:new Date(Date.now()-7200000).toISOString(), created_at:new Date(Date.now()-259200000).toISOString()},
+  {id:4,phone:'919765432100',name:'Sneha Patel',   score:88,label:'HOT', intent:'booking',      message_count:12,last_message:new Date(Date.now()-1800000).toISOString(), created_at:new Date(Date.now()-43200000).toISOString()},
+  {id:5,phone:'919654321098',name:'Vikram Singh',  score:54,label:'WARM',intent:'availability', message_count:4, last_message:new Date(Date.now()-5400000).toISOString(), created_at:new Date(Date.now()-129600000).toISOString()},
+  {id:6,phone:'919543210987',name:'Anita Verma',   score:79,label:'HOT', intent:'emi_query',    message_count:6, last_message:new Date(Date.now()-900000).toISOString(),  created_at:new Date(Date.now()-21600000).toISOString()},
+  {id:7,phone:'919432109876',name:'Ravi Kumar',    score:38,label:'COLD',intent:'general',       message_count:1, last_message:new Date(Date.now()-9000000).toISOString(), created_at:new Date(Date.now()-345600000).toISOString()},
+  {id:8,phone:'919321098765',name:'Deepa Nair',    score:61,label:'WARM',intent:'price_inquiry',message_count:3, last_message:new Date(Date.now()-2700000).toISOString(), created_at:new Date(Date.now()-108000000).toISOString()},
+];
+const DEMO_STATS  = {total:8,hot:3,warm:3,cold:2};
+const DEMO_CONVOS = [
+  {role:'user',     message:'Hi, I am looking for a 2BHK in Kharghar',score:null,created_at:new Date(Date.now()-3600000).toISOString()},
+  {role:'assistant',message:'Ji namaste! Main Niharika bol rahi hoon Krishna Group se. Krishna Aura ek G+45 luxury tower hai Sector 34A, Kharghar mein. 2 BHK 1075 sq ft se start hota hai. More details chahiye?',score:55,created_at:new Date(Date.now()-3540000).toISOString()},
+  {role:'user',     message:'Yes, pricing details? Budget 1.5 Crore',score:null,created_at:new Date(Date.now()-3480000).toISOString()},
+  {role:'assistant',message:'2 BHK Cat 2 (1275 sq ft) ₹1.42 Crore — fits your budget well. Launch offer ₹6,000/sq ft valid till 31st May. Site visit karein?',score:72,created_at:new Date(Date.now()-3420000).toISOString()},
+  {role:'user',     message:'Yes Sunday visit',score:null,created_at:new Date(Date.now()-3360000).toISOString()},
+  {role:'assistant',message:'Sunday shaam 4 baje confirmed. Hamari team kal call karegi. Krishna Aura mein milte hain!',score:92,created_at:new Date(Date.now()-3300000).toISOString()},
+];
+
+const gc  = s => s>=75?'var(--hot)':s>=45?'var(--warm)':'var(--cold)';
+const fmt = ts => { if(!ts)return'—'; const d=new Date(ts); return d.toLocaleDateString('en-IN',{day:'numeric',month:'short'})+' '+d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}); };
+const ago = ts => { if(!ts)return'—'; const m=Math.floor((Date.now()-new Date(ts))/60000); if(m<1)return'just now'; if(m<60)return m+'m ago'; const hr=Math.floor(m/60); if(hr<24)return hr+'h ago'; return Math.floor(hr/24)+'d ago'; };
+
+const ScoreBar = ({score}) => h('div',{className:'sc-row'},
+  h('span',{className:'sc-n'},score),
+  h('div',{className:'sc-bar'},h('div',{className:'sc-fill',style:{width:score+'%',background:gc(score)}}))
+);
+const Badge   = ({label}) => h('span',{className:`badge b-${label.toLowerCase()}`},label);
+const Spinner = () => h('div',{className:'spinner'});
+const Field   = ({label,hint,children}) => h('div',{className:'form-field'},
+  h('label',{className:'form-label'},label),
+  children,
+  hint&&h('div',{style:{fontSize:'11px',color:'var(--text3)',marginTop:'4px',fontFamily:'var(--mono)'}},hint)
+);
+const Toast = ({msg,type,onDone}) => {
+  useEffect(()=>{const t=setTimeout(onDone,3200);return()=>clearTimeout(t)},[]);
+  return h('div',{className:`toast ${type==='success'?'ok':'err'}`},
+    h('i',{className:type==='success'?'ti ti-circle-check':'ti ti-circle-x'}),msg);
+};
+
+const Donut = ({stats}) => {
+  const ref=useRef(null),chart=useRef(null);
+  useEffect(()=>{
+    if(!ref.current||!stats)return;
+    chart.current?.destroy();
+    chart.current=new Chart(ref.current,{
+      type:'doughnut',
+      data:{
+        labels:['Hot','Warm','Cold'],
+        datasets:[{data:[stats.hot,stats.warm,stats.cold],backgroundColor:['#EFA0A0','#F0CC80','#93B4F0'],borderWidth:0,hoverOffset:3}]
+      },
+      options:{responsive:true,maintainAspectRatio:false,cutout:'74%',plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.label}: ${c.raw}`}}}}
+    });
+    return()=>chart.current?.destroy();
+  },[stats]);
+  return h('canvas',{ref,role:'img','aria-label':'Lead distribution'});
+};
+
+/* ─── LEAD MODAL ──────────────────────────────────────────────── */
+const LeadModal = ({lead,apiBase,isDemo,onClose,showToast}) => {
+  const [convos,setConvos]=useState(null);
+  const [msg,setMsg]=useState('');
+  const [busy,setBusy]=useState(false);
+  useEffect(()=>{
+    if(isDemo){setConvos(DEMO_CONVOS);return;}
+    fetch(`${apiBase}/leads/${lead.phone}`).then(r=>r.json()).then(d=>setConvos(d.data?.conversations||[])).catch(()=>setConvos([]));
+  },[lead.phone,isDemo]);
+  async function send(){
+    if(!msg.trim()||busy)return;
+    if(isDemo){showToast('Demo mode — connect backend to send messages','err');return;}
+    setBusy(true);
+    try{
+      const r=await fetch(`${apiBase}/send`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:lead.phone,message:msg})});
+      const d=await r.json();
+      if(d.success){showToast('Message sent','success');setMsg('');}
+      else showToast(d.error||'Failed','err');
+    }catch{showToast('Cannot connect to backend','err');}
+    setBusy(false);
+  }
+  return h('div',{className:'overlay',onClick:e=>e.target===e.currentTarget&&onClose()},
+    h('div',{className:'modal'},
+      h('div',{className:'modal-hd'},
+        h('div',null,
+          h('div',{style:{display:'flex',alignItems:'center',gap:'8px',marginBottom:'3px'}},
+            h('span',{style:{fontSize:'15px',fontWeight:'600',color:'var(--text1)',letterSpacing:'-0.3px'}},lead.name),
+            h(Badge,{label:lead.label}),
+            isDemo&&h('span',{className:'badge b-tag'},'DEMO')
+          ),
+          h('div',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)'}},lead.phone)
+        ),
+        h('button',{className:'x-btn',onClick:onClose},h('i',{className:'ti ti-x'}))
+      ),
+      h('div',{className:'modal-bd'},
+        isDemo&&h('div',{className:'notice'},h('i',{className:'ti ti-info-circle'}),'Demo mode — connect backend to view real conversations.'),
+        h('div',{className:'pf-grid'},
+          [['Score',`${lead.score} / 100`,gc(lead.score)],['Status',lead.label,null],
+           ['Intent',(lead.intent||'general').replace('_',' '),null],['Messages',lead.message_count||0,null],
+           ['First seen',fmt(lead.created_at),null],['Last active',ago(lead.last_message),null]]
+          .map(([k,v,c])=>h('div',{key:k,className:'pf-item'},
+            h('div',{className:'pf-key'},k),
+            h('div',{className:'pf-val',style:c?{color:c}:{}},v)))
+        ),
+        h('div',{className:'sect-label'},'Conversation'),
+        convos===null?h('div',{className:'empty'},h(Spinner)):
+        convos.length===0?h('div',{className:'empty'},h('i',{className:'ti ti-message-off'}),h('p',null,'No messages yet')):
+        h('div',{className:'chat-log',style:{maxHeight:'200px',overflowY:'auto',marginBottom:'14px'}},
+          convos.map((c,i)=>h('div',{key:i,className:`cm ${c.role}`},
+            h('div',{className:'cb'},c.message),
+            h('div',{className:'cm-meta'},fmt(c.created_at))
+          ))
+        ),
+        h('div',{className:'sect-label'},'Send Message'),
+        h('textarea',{value:msg,onChange:e=>setMsg(e.target.value),placeholder:'Type a follow-up message...'}),
+        h('div',{style:{marginTop:'8px'}},
+          h('button',{className:'btn btn-primary btn-sm',onClick:send,disabled:busy||!msg.trim()},
+            busy?h(Spinner):h('i',{className:'ti ti-send'}),' ',busy?'Sending...':'Send on WhatsApp'))
+      )
+    )
+  );
+};
+
+/* ─── BROADCAST MODAL ─────────────────────────────────────────── */
+const BroadcastModal = ({apiBase,isDemo,onClose,showToast,leads}) => {
+  const [tier,setTier]=useState('WARM');
+  const [msg,setMsg]=useState('');
+  const [busy,setBusy]=useState(false);
+  const [result,setResult]=useState(null);
+  const count=leads.filter(l=>l.label===tier).length;
+  const templates=[
+    {l:'Site Visit', m:'Ji! Is weekend site visits available hain. Kya main aapke liye slot book karoon?'},
+    {l:'Offer Alert',m:'Limited period launch offer chal raha hai — interested hain? Details share karoon?'},
+    {l:'Follow Up',  m:'Ji namaste! Koi question tha property ke baare mein? Main help kar sakti hoon.'},
+  ];
+  async function send(){
+    if(!msg.trim()||busy)return;
+    if(isDemo){showToast('Demo mode — connect backend to broadcast','err');return;}
+    setBusy(true);setResult(null);
+    try{
+      const r=await fetch(`${apiBase}/broadcast`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({label:tier,message:msg})});
+      const d=await r.json();
+      if(d.success){setResult(d);showToast(`Sent to ${d.sent} leads`,'success');}
+      else showToast(d.error||'Failed','err');
+    }catch{showToast('Cannot connect to backend','err');}
+    setBusy(false);
+  }
+  return h('div',{className:'overlay',onClick:e=>e.target===e.currentTarget&&onClose()},
+    h('div',{className:'modal'},
+      h('div',{className:'modal-hd'},
+        h('div',null,
+          h('div',{className:'modal-hd-title'},'Broadcast Message'),
+          h('div',{className:'modal-hd-sub'},'Send WhatsApp to all leads in a tier')
+        ),
+        h('button',{className:'x-btn',onClick:onClose},h('i',{className:'ti ti-x'}))
+      ),
+      h('div',{className:'modal-bd'},
+        isDemo&&h('div',{className:'notice'},h('i',{className:'ti ti-info-circle'}),'Demo mode — connect backend to send real broadcasts.'),
+        h('div',{className:'form-field'},
+          h('label',{className:'form-label'},'Target tier'),
+          h('div',{className:'chips'},
+            ['HOT','WARM','COLD'].map(t=>h('button',{key:t,className:`chip ${tier===t?'c-'+t.toLowerCase():''}`,onClick:()=>setTier(t)},
+              `${t} (${leads.filter(l=>l.label===t).length})`))
+          )
+        ),
+        h('div',{className:'form-field'},
+          h('label',{className:'form-label'},'Templates'),
+          h('div',{className:'chips',style:{marginBottom:'10px'}},
+            templates.map(t=>h('button',{key:t.l,className:'chip',onClick:()=>setMsg(t.m)},t.l)))
+        ),
+        h('div',{className:'form-field'},
+          h('label',{className:'form-label'},`Message — goes to ${count} lead${count!==1?'s':''}`),
+          h('textarea',{value:msg,onChange:e=>setMsg(e.target.value),placeholder:'Type your message here...',style:{minHeight:'96px'}})
+        ),
+        result&&h('div',{style:{background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:'var(--r)',padding:'9px 13px',fontSize:'12px',color:'var(--text2)',fontFamily:'var(--mono)'}},
+          `Sent: ${result.sent}   Failed: ${result.failed||0}   Total: ${result.total}`)
+      ),
+      h('div',{className:'modal-ft'},
+        h('button',{className:'btn btn-ghost',onClick:onClose},'Cancel'),
+        h('button',{className:'btn btn-primary',onClick:send,disabled:busy||!msg.trim()||count===0},
+          busy?h(Spinner):h('i',{className:'ti ti-speakerphone'}),' ',busy?'Sending...':'Send Broadcast')
+      )
+    )
+  );
+};
+
+/* ─── CONNECT MODAL ───────────────────────────────────────────── */
+const ConnectModal = ({apiBase,setApiBase,onClose,showToast}) => {
+  const [url,setUrl]=useState(apiBase==='DEMO'?'':apiBase);
+  const [testing,setTesting]=useState(false);
+  const [status,setStatus]=useState(null);
+  async function test(u){
+    const target=(u||url).trim();
+    if(!target){setApiBase('DEMO');showToast('Switched to demo mode','success');onClose();return;}
+    setTesting(true);setStatus(null);
+    try{
+      const r=await fetch(`${target}/stats`);
+      if(r.ok){setApiBase(target);localStorage.setItem('pa_api',target);setStatus({ok:true});showToast('Connected','success');setTimeout(onClose,900);}
+      else setStatus({ok:false,msg:`HTTP ${r.status}`});
+    }catch{setStatus({ok:false,msg:'Cannot reach server'});}
+    setTesting(false);
+  }
+  return h('div',{className:'overlay',onClick:e=>e.target===e.currentTarget&&onClose()},
+    h('div',{className:'modal',style:{maxWidth:'460px'}},
+      h('div',{className:'modal-hd'},
+        h('div',null,
+          h('div',{className:'modal-hd-title'},'Connect Backend'),
+          h('div',{className:'modal-hd-sub'},'Paste your server URL to load live data')
+        ),
+        h('button',{className:'x-btn',onClick:onClose},h('i',{className:'ti ti-x'}))
+      ),
+      h('div',{className:'modal-bd'},
+        h('div',{className:'notice'},h('i',{className:'ti ti-info-circle'}),'Currently showing demo data. Enter your backend URL to connect.'),
+        h('div',{className:'form-field'},
+          h('label',{className:'form-label'},'Backend URL'),
+          h('div',{className:'inp-wrap'},
+            h('i',{className:'ti ti-link'}),
+            h('input',{value:url,onChange:e=>setUrl(e.target.value),placeholder:'https://your-bot.fly.dev/api',onKeyDown:e=>e.key==='Enter'&&test(url)})
+          ),
+          h('div',{style:{fontSize:'11px',color:'var(--text3)',marginTop:'5px',fontFamily:'var(--mono)'}},'Local testing: http://localhost:3000/api')
+        ),
+        status&&h('div',{style:{
+          padding:'8px 12px',borderRadius:'var(--r)',fontSize:'12px',fontFamily:'var(--mono)',
+          background:status.ok?'var(--green-bg)':'var(--hot-bg)',
+          color:status.ok?'var(--green)':'var(--hot)',
+          border:`1px solid ${status.ok?'#BBF7D0':'var(--hot-br)'}`
+        }},status.ok?'Connected successfully':'Error: '+status.msg)
+      ),
+      h('div',{className:'modal-ft'},
+        h('button',{className:'btn btn-ghost',onClick:()=>{setApiBase('DEMO');localStorage.removeItem('pa_api');showToast('Using demo data','success');onClose();}},'Use Demo'),
+        h('button',{className:'btn btn-primary',onClick:()=>test(url),disabled:testing},
+          testing?h(Spinner):h('i',{className:'ti ti-plug'}),' ',testing?'Connecting...':'Connect')
+      )
+    )
+  );
+};
+
+/* ─── OVERVIEW PAGE ───────────────────────────────────────────── */
+const Overview = ({stats,leads,loading,onSelect,isDemo}) => {
+  const recent=leads.slice(0,8);
+  const s=stats||DEMO_STATS;
+  const statCards=[
+    {label:'Total Leads',val:s.total,meta:'all time'},
+    {label:'Hot Leads',  val:s.hot,  meta:'ready to convert'},
+    {label:'Warm Leads', val:s.warm, meta:'in progress'},
+    {label:'Cold Leads', val:s.cold, meta:'early stage'},
+  ];
+  return h('div',null,
+    isDemo&&h('div',{className:'notice'},h('i',{className:'ti ti-eye'}),'Showing demo data. Go to Settings to connect your backend.'),
+    h('div',{className:'stats-row'},
+      statCards.map(c=>h('div',{key:c.label,className:'stat'},
+        h('div',{className:'stat-label'},c.label),
+        h('div',{className:'stat-val'},c.val),
+        h('div',{className:'stat-meta'},c.meta)
+      ))
+    ),
+    h('div',{className:'g2'},
+      h('div',{className:'card'},
+        h('div',{className:'card-hd'},h('span',{className:'card-title'},'Distribution')),
+        h('div',{className:'card-bd'},
+          h('div',{style:{height:'120px',marginBottom:'14px'}},h(Donut,{stats:s})),
+          [['Hot',s.hot,'var(--hot)'],['Warm',s.warm,'var(--warm)'],['Cold',s.cold,'var(--cold)']].map(([l,v,c])=>
+            h('div',{key:l,style:{display:'flex',alignItems:'center',gap:'8px',fontSize:'12px',marginBottom:'6px',color:'var(--text2)'}},
+              h('span',{style:{width:'8px',height:'8px',borderRadius:'2px',background:c,flexShrink:0}}),
+              h('span',{style:{flex:1}},l),
+              h('span',{style:{fontFamily:'var(--mono)',fontWeight:'600',color:'var(--text1)'}},v)
+            )
+          )
+        )
+      ),
+      h('div',{className:'card'},
+        h('div',{className:'card-hd'},h('span',{className:'card-title'},'Recent Leads')),
+        loading?h('div',{className:'empty'},h(Spinner)):
+        h('div',{className:'tbl-wrap'},
+          h('table',null,
+            h('thead',null,h('tr',null,['Name','Score','Status','Last Active'].map(c=>h('th',{key:c},c)))),
+            h('tbody',null,recent.map(l=>h('tr',{key:l.id,onClick:()=>onSelect(l)},
+              h('td',{className:'td-name'},l.name),
+              h('td',null,h(ScoreBar,{score:l.score})),
+              h('td',null,h(Badge,{label:l.label})),
+              h('td',null,ago(l.last_message))
+            )))
+          )
+        )
+      )
+    )
+  );
+};
+
+/* ─── ALL LEADS PAGE ──────────────────────────────────────────── */
+const LeadsPage = ({leads,loading,onSelect}) => {
+  const [search,setSearch]=useState('');
+  const [filter,setFilter]=useState('ALL');
+  const visible=leads.filter(l=>{
+    const fm=filter==='ALL'||l.label===filter;
+    const sm=!search||(l.name||'').toLowerCase().includes(search.toLowerCase())||(l.phone||'').includes(search);
+    return fm&&sm;
+  });
+  const counts={ALL:leads.length,HOT:leads.filter(l=>l.label==='HOT').length,WARM:leads.filter(l=>l.label==='WARM').length,COLD:leads.filter(l=>l.label==='COLD').length};
+  return h('div',{className:'card'},
+    h('div',{className:'card-hd',style:{flexWrap:'wrap',gap:'8px'}},
+      h('span',{className:'card-title'},'All Leads'),
+      h('div',{style:{display:'flex',gap:'7px',flex:1,justifyContent:'flex-end',flexWrap:'wrap',alignItems:'center'}},
+        h('div',{className:'chips'},
+          [['ALL','c-all'],['HOT','c-hot'],['WARM','c-warm'],['COLD','c-cold']].map(([k,cls])=>
+            h('button',{key:k,className:`chip ${filter===k?cls:''}`,onClick:()=>setFilter(k)},
+              `${k==='ALL'?'All':k} (${counts[k]})`)
+          )
+        ),
+        h('div',{className:'inp-wrap',style:{width:'200px'}},
+          h('i',{className:'ti ti-search'}),
+          h('input',{value:search,onChange:e=>setSearch(e.target.value),placeholder:'Search name or phone...'})
+        )
+      )
+    ),
+    loading?h('div',{className:'empty',style:{padding:'56px'}},h(Spinner)):
+    visible.length===0?h('div',{className:'empty',style:{padding:'56px'}},h('i',{className:'ti ti-users-off'}),h('p',null,'No leads found')):
+    h('div',{className:'tbl-wrap'},
+      h('table',null,
+        h('thead',null,h('tr',null,['Name','Phone','Score','Status','Intent','Msgs','First Seen','Last Active'].map(c=>h('th',{key:c},c)))),
+        h('tbody',null,visible.map(l=>h('tr',{key:l.id,onClick:()=>onSelect(l)},
+          h('td',{className:'td-name'},l.name),
+          h('td',{style:{fontFamily:'var(--mono)',fontSize:'11px',color:'var(--text3)'}},l.phone),
+          h('td',null,h(ScoreBar,{score:l.score})),
+          h('td',null,h(Badge,{label:l.label})),
+          h('td',null,(l.intent||'general').replace('_',' ')),
+          h('td',{style:{fontFamily:'var(--mono)',color:'var(--text3)'}},l.message_count||0),
+          h('td',{style:{color:'var(--text3)'}},fmt(l.created_at)),
+          h('td',{style:{color:'var(--text3)'}},ago(l.last_message))
+        )))
+      )
+    )
+  );
+};
+
+/* ─── AGENT SETTINGS PAGE ─────────────────────────────────────── */
+const AGENT_DEFAULTS = {
+  bot_name:'Niharika',business_name:'Krishna Group',project_name:'Krishna Aura',
+  location:'Kharghar, Navi Mumbai',language:'hinglish',tone:'friendly',
+  ai_model:'gemini-2.5-flash',system_prompt:'',sales_phone:'',welcome_message:'',
+  hot_score:8,warm_score:5,office_hours_on:false,office_start:'09:00',office_end:'21:00',
+  properties:[
+    {name:'2 BHK Cat 1',size:'1075 sq ft',price:'₹1.21 Crore'},
+    {name:'2 BHK Cat 2',size:'1275 sq ft',price:'₹1.42 Crore'},
+    {name:'3 BHK',      size:'1850 sq ft',price:'₹2.02 Crore'},
+  ]
+};
+
+const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
+  const [s,setS]       = useState(null);
+  const [tab,setTab]   = useState('identity');
+  const [saving,setSaving] = useState(false);
+
+  useEffect(()=>{
+    if(isDemo){setS({...AGENT_DEFAULTS});return;}
+    fetch(`${apiBase}/agent-settings`).then(r=>r.json()).then(d=>setS(d.data||{...AGENT_DEFAULTS})).catch(()=>setS({...AGENT_DEFAULTS}));
+  },[apiBase,isDemo]);
+
+  const set=(k,v)=>setS(p=>({...p,[k]:v}));
+  const setProp=(i,k,v)=>setS(p=>{const pr=[...p.properties];pr[i]={...pr[i],[k]:v};return{...p,properties:pr};});
+  const addProp=()=>setS(p=>({...p,properties:[...p.properties,{name:'',size:'',price:''}]}));
+  const removeProp=i=>setS(p=>({...p,properties:p.properties.filter((_,idx)=>idx!==i)}));
+
+  async function save(){
+    if(isDemo){showToast('Demo mode — connect backend to save','err');return;}
+    setSaving(true);
+    try{
+      const r=await fetch(`${apiBase}/agent-settings`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(s)});
+      const d=await r.json();
+      if(d.success)showToast('Settings saved — bot updated','success');
+      else showToast(d.error||'Save failed','err');
+    }catch{showToast('Cannot reach backend','err');}
+    setSaving(false);
+  }
+
+  if(!s)return h('div',{className:'empty'},h(Spinner));
+
+  const TABS=[
+    {k:'identity',icon:'ti-id-badge', l:'Bot Identity'},
+    {k:'model',   icon:'ti-cpu',      l:'AI Model'},
+    {k:'prompt',  icon:'ti-file-text',l:'System Prompt'},
+    {k:'props',   icon:'ti-building', l:'Properties'},
+    {k:'alerts',  icon:'ti-bell',     l:'Alerts & Hours'},
+  ];
+
+  const tabBar=h('div',{className:'stab-bar'},
+    TABS.map(t=>h('button',{key:t.k,className:`stab ${tab===t.k?'active':''}`,onClick:()=>setTab(t.k)},
+      h('i',{className:'ti '+t.icon}),t.l))
+  );
+
+  const saveBar=h('div',{style:{marginTop:'20px',display:'flex',justifyContent:'flex-end',alignItems:'center',gap:'8px'}},
+    isDemo&&h('span',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)',marginRight:'auto'}},
+      'Connect backend to save settings'),
+    h('button',{className:'btn btn-primary',onClick:save,disabled:saving},
+      saving?h(Spinner):h('i',{className:'ti ti-device-floppy'}),' ',saving?'Saving...':'Save Settings')
+  );
+
+  /* Identity tab */
+  const identityTab=h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'14px'}},
+    h('div',{className:'card'},
+      h('div',{className:'card-hd'},h('span',{className:'card-title'},'Business Info')),
+      h('div',{className:'card-bd'},
+        h(Field,{label:'Bot Name',hint:'Name the AI uses to introduce itself'},
+          h('input',{value:s.bot_name,onChange:e=>set('bot_name',e.target.value),placeholder:'e.g. Niharika'})),
+        h(Field,{label:'Business / Developer Name'},
+          h('input',{value:s.business_name,onChange:e=>set('business_name',e.target.value),placeholder:'e.g. Krishna Group'})),
+        h(Field,{label:'Project Name'},
+          h('input',{value:s.project_name,onChange:e=>set('project_name',e.target.value),placeholder:'e.g. Krishna Aura'})),
+        h(Field,{label:'Location'},
+          h('input',{value:s.location,onChange:e=>set('location',e.target.value),placeholder:'e.g. Kharghar, Navi Mumbai'}))
+      )
+    ),
+    h('div',{className:'card'},
+      h('div',{className:'card-hd'},h('span',{className:'card-title'},'Language & Tone')),
+      h('div',{className:'card-bd'},
+        h(Field,{label:'Reply Language',hint:'Applied to all conversations'},
+          h('select',{value:s.language,onChange:e=>set('language',e.target.value)},
+            h('option',{value:'hinglish'},'Hinglish — Hindi + English (Recommended)'),
+            h('option',{value:'hindi'},'Hindi only'),
+            h('option',{value:'english'},'English only'),
+            h('option',{value:'marathi'},'Marathi')
+          )
+        ),
+        h(Field,{label:'Bot Personality'},
+          h('select',{value:s.tone,onChange:e=>set('tone',e.target.value)},
+            h('option',{value:'friendly'},'Friendly & Warm'),
+            h('option',{value:'professional'},'Professional & Formal'),
+            h('option',{value:'energetic'},'Energetic & Persuasive')
+          )
+        )
+      )
+    )
+  );
+
+  /* Model tab */
+  const modelTab=h('div',{className:'card'},
+    h('div',{className:'card-hd'},h('span',{className:'card-title'},'AI Model')),
+    h('div',{className:'card-bd'},
+      h(Field,{label:'Select Model',hint:'Changes apply from the next conversation — no restart needed'},
+        h('select',{value:s.ai_model,onChange:e=>set('ai_model',e.target.value)},
+          h('optgroup',{label:'Google Gemini'},
+            h('option',{value:'gemini-2.5-flash'},'Gemini 2.5 Flash — Fast, cheapest (Recommended)'),
+            h('option',{value:'gemini-2.0-flash'},'Gemini 2.0 Flash — Balanced'),
+            h('option',{value:'gemini-1.5-pro'},  'Gemini 1.5 Pro — Smartest Gemini, slower')
+          ),
+          h('optgroup',{label:'Anthropic Claude'},
+            h('option',{value:'claude-haiku-4-5-20251001'},'Claude Haiku 4.5 — Fast, very affordable'),
+            h('option',{value:'claude-sonnet-4-6'},         'Claude Sonnet 4.6 — Balanced, high quality'),
+            h('option',{value:'claude-opus-4-7'},           'Claude Opus 4.7 — Most capable, premium cost')
+          )
+        )
+      ),
+      h('div',{style:{marginTop:'14px',background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:'var(--r)',padding:'12px 14px'}},
+        h('div',{style:{fontSize:'10.5px',fontWeight:'600',color:'var(--text2)',fontFamily:'var(--mono)',textTransform:'uppercase',letterSpacing:'0.07em',marginBottom:'8px'}},'Cost Reference'),
+        [
+          ['Gemini 2.5 Flash', '~₹0.08 / conv',  'Lowest'],
+          ['Gemini 1.5 Pro',   '~₹0.35 / conv',  'Medium'],
+          ['Claude Haiku 4.5', '~₹0.14 / conv',  'Low'],
+          ['Claude Sonnet 4.6','~₹1.20 / conv',  'Medium'],
+          ['Claude Opus 4.7',  '~₹6.00 / conv',  'Premium'],
+        ].map(([m,c,t])=>h('div',{key:m,style:{display:'flex',alignItems:'center',gap:'8px',fontSize:'11.5px',marginBottom:'5px',color:'var(--text2)'}},
+          h('span',{style:{flex:1,fontFamily:'var(--mono)',fontSize:'11px'}},m),
+          h('span',{style:{fontFamily:'var(--mono)',color:'var(--text1)',fontWeight:'500'}},c),
+          h('span',{style:{color:'var(--text3)',fontSize:'10px',fontFamily:'var(--mono)'}},t)
+        ))
+      ),
+      h('div',{style:{fontSize:'11px',color:'var(--text3)',marginTop:'10px',fontFamily:'var(--mono)'}},
+        'Note: Claude models require ANTHROPIC_API_KEY in your .env file.')
+    )
+  );
+
+  /* System prompt tab */
+  const promptTab=h('div',{className:'card'},
+    h('div',{className:'card-hd'},
+      h('span',{className:'card-title'},'System Prompt'),
+      h('span',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)'}},(s.system_prompt||'').length+' chars')
+    ),
+    h('div',{className:'card-bd'},
+      h('textarea',{
+        value:s.system_prompt,onChange:e=>set('system_prompt',e.target.value),
+        style:{minHeight:'380px',fontFamily:'var(--mono)',fontSize:'11.5px',lineHeight:'1.65'},
+        placeholder:'Paste your full system prompt here.\n\nLeave empty to use the default built-in prompt from backend/src/ai.js\n\nTip: copy the SYSTEM_PROMPT from ai.js, paste here, then edit.'
+      }),
+      h('div',{style:{fontSize:'11px',color:'var(--text3)',marginTop:'6px',fontFamily:'var(--mono)'}},
+        'Saved prompt overrides the hardcoded default. Takes effect on next conversation.')
+    )
+  );
+
+  /* Properties tab */
+  const propsTab=h('div',{className:'card'},
+    h('div',{className:'card-hd'},
+      h('span',{className:'card-title'},'Property Listings'),
+      h('button',{className:'btn btn-ghost btn-sm',onClick:addProp},h('i',{className:'ti ti-plus'}),' Add')
+    ),
+    h('div',{className:'card-bd'},
+      s.properties.length===0
+        ?h('div',{className:'empty'},h('i',{className:'ti ti-building-off'}),h('p',null,'No properties added yet'))
+        :h('div',{style:{display:'flex',flexDirection:'column',gap:'8px'}},
+          s.properties.map((p,i)=>h('div',{key:i,style:{
+            display:'grid',gridTemplateColumns:'1fr 1fr 1fr 36px',gap:'8px',alignItems:'end',
+            background:'var(--surface2)',padding:'12px',borderRadius:'var(--r)',border:'1px solid var(--border)'
+          }},
+            h('div',null,h('label',{className:'form-label'},'Unit Type'),h('input',{value:p.name, onChange:e=>setProp(i,'name', e.target.value),placeholder:'2 BHK'})),
+            h('div',null,h('label',{className:'form-label'},'Size'),       h('input',{value:p.size, onChange:e=>setProp(i,'size', e.target.value),placeholder:'1075 sq ft'})),
+            h('div',null,h('label',{className:'form-label'},'Price'),      h('input',{value:p.price,onChange:e=>setProp(i,'price',e.target.value),placeholder:'₹1.21 Crore'})),
+            h('button',{className:'btn btn-danger btn-sm',onClick:()=>removeProp(i),style:{height:'34px',padding:'0',justifyContent:'center',width:'36px'}},
+              h('i',{className:'ti ti-trash'}))
+          ))
+        )
+    )
+  );
+
+  /* Alerts tab */
+  const alertsTab=h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'14px'}},
+    h('div',{className:'card'},
+      h('div',{className:'card-hd'},h('span',{className:'card-title'},'Alerts')),
+      h('div',{className:'card-bd'},
+        h(Field,{label:'Sales Alert WhatsApp Number',hint:'Hot leads send instant alert to this number'},
+          h('input',{value:s.sales_phone,onChange:e=>set('sales_phone',e.target.value),placeholder:'919876543210'})),
+        h(Field,{label:'Welcome Message',hint:'Leave empty — AI generates the greeting'},
+          h('textarea',{value:s.welcome_message,onChange:e=>set('welcome_message',e.target.value),
+            placeholder:'Optional custom first message...',style:{minHeight:'72px'}})),
+        h(Field,{label:'Hot Lead Threshold (score 1–10)',hint:'Score ≥ this value triggers HOT + alert'},
+          h('input',{type:'number',min:'1',max:'10',value:s.hot_score, onChange:e=>set('hot_score', parseInt(e.target.value)||8)})),
+        h(Field,{label:'Warm Lead Threshold (score 1–10)',hint:'Score ≥ this value gets WARM label'},
+          h('input',{type:'number',min:'1',max:'10',value:s.warm_score,onChange:e=>set('warm_score',parseInt(e.target.value)||5)}))
+      )
+    ),
+    h('div',{className:'card'},
+      h('div',{className:'card-hd'},h('span',{className:'card-title'},'Office Hours')),
+      h('div',{className:'card-bd'},
+        h('div',{
+          style:{display:'flex',alignItems:'center',gap:'10px',padding:'11px 13px',
+            background:'var(--surface2)',borderRadius:'var(--r)',border:'1px solid var(--border)',
+            marginBottom:'14px',cursor:'pointer'},
+          onClick:()=>set('office_hours_on',!s.office_hours_on)},
+          h('input',{type:'checkbox',checked:s.office_hours_on,onChange:()=>{},
+            style:{width:'auto',cursor:'pointer',accentColor:'var(--accent)'}}),
+          h('div',null,
+            h('div',{style:{fontSize:'13px',fontWeight:'500',color:'var(--text1)'}},'Enable office hours'),
+            h('div',{style:{fontSize:'11px',color:'var(--text3)',marginTop:'2px'}},
+              'Bot replies only during set hours')
+          )
+        ),
+        s.office_hours_on&&h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}},
+          h(Field,{label:'Start Time'},h('input',{type:'time',value:s.office_start,onChange:e=>set('office_start',e.target.value)})),
+          h(Field,{label:'End Time'},  h('input',{type:'time',value:s.office_end,  onChange:e=>set('office_end',  e.target.value)}))
+        ),
+        !s.office_hours_on&&h('div',{style:{fontSize:'12px',color:'var(--text3)'}},
+          'Bot is currently active 24 / 7.')
+      )
+    )
+  );
+
+  return h('div',null,
+    isDemo&&h('div',{className:'notice'},h('i',{className:'ti ti-info-circle'}),'Demo mode — changes are not saved. Connect your backend in Settings.'),
+    tabBar,
+    tab==='identity'&&identityTab,
+    tab==='model'   &&modelTab,
+    tab==='prompt'  &&promptTab,
+    tab==='props'   &&propsTab,
+    tab==='alerts'  &&alertsTab,
+    saveBar
+  );
+};
+
+/* ─── APP ROOT ────────────────────────────────────────────────── */
+function App(){
+  const savedApi=localStorage.getItem('pa_api');
+  const [page,     setPage]  =useState('overview');
+  const [apiBase,  setApiBase]=useState(savedApi||'DEMO');
+  const [leads,    setLeads] =useState(DEMO_LEADS);
+  const [stats,    setStats] =useState(DEMO_STATS);
+  const [loading,  setLoading]=useState(false);
+  const [selected, setSelected]=useState(null);
+  const [showBcast,setBcast]  =useState(false);
+  const [showConn, setConn]   =useState(false);
+  const [toast,    setToast]  =useState(null);
+  const isDemo=apiBase==='DEMO';
+  const showToast=(msg,type='success')=>setToast({msg,type,id:Date.now()});
+
+  const fetchData=useCallback(async()=>{
+    if(isDemo){setLeads(DEMO_LEADS);setStats(DEMO_STATS);return;}
+    setLoading(true);
+    try{
+      const [sr,lr]=await Promise.all([fetch(`${apiBase}/stats`),fetch(`${apiBase}/leads`)]);
+      if(sr.ok&&lr.ok){const[sd,ld]=await Promise.all([sr.json(),lr.json()]);setStats(sd.data);setLeads(ld.data||[]);}
+    }catch(e){console.warn('Fetch failed:',e.message);}
+    setLoading(false);
+  },[apiBase,isDemo]);
+
+  useEffect(()=>{fetchData();const t=setInterval(fetchData,30000);return()=>clearInterval(t);},[fetchData]);
+
+  const hotCount=leads.filter(l=>l.label==='HOT').length;
+  const NAV=[
+    {key:'overview',      icon:'ti-layout-dashboard',label:'Overview'},
+    {key:'leads',         icon:'ti-users',            label:'All Leads',badge:hotCount||null},
+    {key:'agent-settings',icon:'ti-robot',            label:'Agent Settings'},
+  ];
+  const META={
+    overview:        {title:'Overview',       sub:'Real-time lead pipeline'},
+    leads:           {title:'All Leads',      sub:`${leads.length} total`},
+    'agent-settings':{title:'Agent Settings', sub:'Configure your AI bot'},
+  };
+
+  return h('div',{className:'app'},
+    h('aside',{className:'sidebar'},
+      h('div',{className:'sb-top'},
+        h('div',{className:'brand'},
+          h('div',{className:'brand-mark'},h('i',{className:'ti ti-robot'})),
+          h('div',{className:'brand-text'},
+            h('div',{className:'brand-name'},'Propello AI'),
+            h('div',{className:'brand-tag'},'Lead Dashboard')
+          )
+        )
+      ),
+      h('nav',{className:'sb-nav'},
+        h('div',{className:'nav-grp'},'Main'),
+        NAV.map(n=>h('button',{key:n.key,className:`nav-btn ${page===n.key?'active':''}`,onClick:()=>setPage(n.key)},
+          h('i',{className:'ti '+n.icon}),n.label,
+          n.badge&&h('span',{className:'nav-badge'},n.badge)
+        )),
+        h('div',{className:'nav-grp'},'Actions'),
+        h('button',{className:'nav-btn',onClick:()=>setBcast(true)},h('i',{className:'ti ti-speakerphone'}),'Broadcast'),
+        h('button',{className:'nav-btn',onClick:fetchData},h('i',{className:`ti ti-refresh${loading?' spin':''}`}),'Refresh'),
+        h('button',{className:'nav-btn',onClick:()=>setConn(true)},h('i',{className:'ti ti-plug'}),'Connect Backend')
+      ),
+      h('div',{className:'sb-foot'},
+        h('div',{className:'conn-pill'},
+          h('div',{className:`dot ${isDemo?'demo':'on'}`}),
+          h('span',{className:'conn-label'},isDemo?'Demo mode':'Live')
+        )
+      )
+    ),
+    h('main',{className:'main'},
+      h('div',{className:'topbar'},
+        h('div',null,
+          h('div',{className:'pg-title'},META[page]?.title),
+          h('div',{className:'pg-sub'},META[page]?.sub)
+        ),
+        h('div',{className:'top-right'},
+          isDemo&&h('button',{className:'btn btn-ghost btn-sm',onClick:()=>setConn(true)},h('i',{className:'ti ti-plug'}),'Connect'),
+          h('button',{className:'btn btn-ghost btn-sm',onClick:fetchData},h('i',{className:`ti ti-refresh${loading?' spin':''}`}),'Refresh'),
+          h('button',{className:'btn btn-primary btn-sm',onClick:()=>setBcast(true)},h('i',{className:'ti ti-speakerphone'}),'Broadcast')
+        )
+      ),
+      h('div',{className:'content'},
+        page==='overview'       ?h(Overview,         {stats,leads,loading,onSelect:setSelected,isDemo}):
+        page==='leads'          ?h(LeadsPage,        {leads,loading,onSelect:setSelected}):
+        page==='agent-settings' ?h(AgentSettingsPage,{apiBase,isDemo,showToast}):null
+      )
+    ),
+    selected  &&h(LeadModal,     {lead:selected,apiBase,isDemo,onClose:()=>setSelected(null),showToast}),
+    showBcast &&h(BroadcastModal,{apiBase,isDemo,onClose:()=>setBcast(false),showToast,leads}),
+    showConn  &&h(ConnectModal,  {apiBase,setApiBase,onClose:()=>setConn(false),showToast}),
+    toast     &&h(Toast,{key:toast.id,msg:toast.msg,type:toast.type,onDone:()=>setToast(null)})
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(h(App));
+</script>
+</body>
+</html>

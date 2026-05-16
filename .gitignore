@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Environment — NEVER commit API keys
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# Runtime
+*.pid
+*.seed
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Settings saved via dashboard (contains client data)
+settings.json

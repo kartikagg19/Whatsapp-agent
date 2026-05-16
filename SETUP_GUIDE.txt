@@ -1,0 +1,245 @@
+# ================================================================
+#  DREAMHOME BOT — COMPLETE SETUP GUIDE
+#  Written in simple language. Follow steps 1 to 6.
+# ================================================================
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  WHAT YOU HAVE IN THIS FOLDER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  📁 backend/       ← The WhatsApp bot server (Node.js code)
+  📄 dashboard/dashboard.html  ← Your admin panel (open in browser)
+  📄 SETUP_GUIDE.txt           ← This file
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  STEP 1 — GET YOUR ANTHROPIC API KEY
+  (This is the AI brain — Claude)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. Go to: https://console.anthropic.com
+  2. Sign up or log in
+  3. Click "API Keys" on left menu
+  4. Click "Create Key" — copy the key (starts with sk-ant-)
+  5. Add credits: Go to Billing → Add Rs.500 minimum
+     (This covers ~25,000 WhatsApp messages with Claude Haiku)
+
+  Save your key. Example: sk-ant-api03-xxxxxxxxxxxxxxxxx
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  STEP 2 — CREATE SUPABASE DATABASE
+  (Free database to save all leads)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. Go to: https://supabase.com
+  2. Sign up free → Click "New Project"
+  3. Give project any name (e.g. dreamhome)
+  4. Set a database password → remember it
+  5. Wait 2 minutes for project to start
+  6. Go to: SQL Editor (left menu) → click "New Query"
+  7. Open file: backend/supabase_setup.sql
+  8. Copy all text from that file → paste in SQL Editor
+  9. Click "Run" — you should see ✓ success
+
+  Then get your keys:
+  10. Go to Settings → API
+  11. Copy "Project URL" → save it
+  12. Copy "anon public" key → save it
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  STEP 3 — SETUP META WHATSAPP API
+  (To receive and send real WhatsApp messages)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. Go to: https://developers.facebook.com
+  2. Click "My Apps" → "Create App"
+  3. Choose "Business" type → click Next
+  4. Name your app (e.g. DreamHome Bot) → Create
+  5. In your app, find "WhatsApp" product → click "Set Up"
+  6. You land on WhatsApp API Setup page
+  7. Under "From" number — use the test number Meta gives you
+     (Later you can add your own business number)
+  8. Copy "Access Token" → save it (this is your WHATSAPP_TOKEN)
+  9. Copy "Phone Number ID" → save it
+
+  For testing right now:
+  10. Under "To" — add your personal WhatsApp number
+  11. Click "Send Message" — you should get a test message
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  STEP 4 — FILL YOUR .ENV FILE
+  (Put all your keys in one place)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Open the file: backend/.env in any text editor (Notepad is fine)
+
+  Replace each "PASTE_YOUR_..." with your actual keys:
+
+  ANTHROPIC_API_KEY=sk-ant-your-key-here
+  WHATSAPP_TOKEN=your-whatsapp-token-here
+  WHATSAPP_PHONE_NUMBER_ID=your-phone-id-here
+  WEBHOOK_VERIFY_TOKEN=dreamhome2025secret   ← keep this as is
+  SUPABASE_URL=https://yourproject.supabase.co
+  SUPABASE_ANON_KEY=your-anon-key-here
+  SALES_PHONE_NUMBER=919876543210   ← your WhatsApp number with country code
+
+  Save the file.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  STEP 5 — RUN THE BOT ON YOUR COMPUTER
+  (Test before going live)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  You need Node.js installed. Download from: https://nodejs.org
+  (Download the LTS version — green button)
+
+  Then open Terminal / Command Prompt:
+
+  Windows: Press Win+R → type "cmd" → press Enter
+  Mac:     Press Cmd+Space → type "terminal" → press Enter
+
+  Type these commands one by one:
+
+    cd path/to/dreamhome-complete/backend
+    npm install
+    npm start
+
+  You should see:
+    ✅ Server   : http://localhost:3000
+    📡 Webhook  : http://localhost:3000/webhook
+
+  Leave this terminal open. Bot is running!
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  STEP 6 — MAKE IT PUBLIC (Deploy Free)
+  (So WhatsApp can reach your bot)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Option A — Fly.io (Recommended, Always Free):
+
+  1. Go to: https://fly.io → Sign up free
+  2. Download Fly CLI: https://fly.io/docs/hands-on/install-flyctl/
+  3. Open terminal in backend folder, run:
+
+       fly auth login
+       fly launch
+       (App name: dreamhome-bot, Region: bom for Mumbai)
+
+  4. Set your secret keys:
+       fly secrets set ANTHROPIC_API_KEY=your-key
+       fly secrets set WHATSAPP_TOKEN=your-token
+       fly secrets set WHATSAPP_PHONE_NUMBER_ID=your-phone-id
+       fly secrets set WEBHOOK_VERIFY_TOKEN=dreamhome2025secret
+       fly secrets set SUPABASE_URL=https://xxx.supabase.co
+       fly secrets set SUPABASE_ANON_KEY=your-key
+       fly secrets set SALES_PHONE_NUMBER=919876543210
+
+  5. Deploy:
+       fly deploy
+
+  Your bot URL will be: https://dreamhome-bot.fly.dev
+
+  Option B — Render.com (Also free, easier):
+  1. Go to: https://render.com → Sign up
+  2. New → Web Service → Connect your GitHub (or upload folder)
+  3. Set Environment Variables (same as .env file keys)
+  4. Deploy — get URL like: https://dreamhome-bot.onrender.com
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  STEP 7 — CONNECT WEBHOOK TO WHATSAPP
+  (Tell Meta where to send messages)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. Go to developers.facebook.com → Your App → WhatsApp → Configuration
+  2. Under "Webhook" section → click "Edit"
+  3. Callback URL: https://dreamhome-bot.fly.dev/webhook
+  4. Verify Token:  dreamhome2025secret
+  5. Click "Verify and Save"
+  6. Then click "Manage" next to Webhook
+  7. Turn ON: messages ✓
+  8. Click Done
+
+  Now send a WhatsApp message to your registered number!
+  Bot should reply within 2-3 seconds.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  STEP 8 — OPEN THE ADMIN DASHBOARD
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. Open file: dashboard/dashboard.html in Chrome or Edge
+  2. You will see the dashboard with DEMO data
+  3. Click "Settings" in the sidebar
+  4. Paste your backend URL: https://dreamhome-bot.fly.dev/api
+  5. Click "Connect" — it shows green "Connected ✓"
+  6. Now you see REAL leads from your WhatsApp!
+
+  Dashboard works even without backend — shows demo data so you can
+  see how it looks before going live.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  HOW TO ADD YOUR OWN PROPERTIES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Open file: backend/src/ai.js in any text editor
+  Find the section that says "YOUR PROPERTIES"
+  Change the property names, prices, locations to your own.
+  Save the file and restart the bot (npm start).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  MONTHLY COST ESTIMATE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  For 500 leads / month:
+  ✓ WhatsApp API   = Rs. 0     (free 1000 conversations)
+  ✓ Claude AI      = Rs. 200   (10,000 messages at Rs.0.02/1000)
+  ✓ Supabase DB    = Rs. 0     (free tier)
+  ✓ Fly.io server  = Rs. 0     (free tier)
+  ─────────────────────────────
+  TOTAL            = Rs. 200 per month
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  WHAT EACH FILE DOES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  backend/src/index.js        Main server — starts everything
+  backend/src/ai.js           Claude AI brain — edit your properties here
+  backend/src/whatsapp.js     Sends and receives WhatsApp messages
+  backend/src/database.js     Saves leads to Supabase
+  backend/src/routes/webhook.js   Handles incoming WhatsApp messages
+  backend/src/routes/admin.js     API for dashboard
+  backend/.env                Your secret keys
+  backend/supabase_setup.sql  Run this once in Supabase SQL Editor
+  dashboard/dashboard.html    Open this in browser = your admin panel
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  NEED HELP?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Bot not replying?
+  → Check terminal — look for red error messages
+  → Make sure webhook is connected in Meta dashboard
+  → Make sure all 6 keys in .env are correct
+
+  Database error?
+  → Go to Supabase → SQL Editor → run supabase_setup.sql again
+
+  AI giving wrong answers?
+  → Edit YOUR PROPERTIES section in backend/src/ai.js
+
+  WhatsApp token expired?
+  → Meta test tokens expire in 24 hours
+  → For permanent: Facebook App → System Users → Generate Permanent Token
+
+================================================================
