@@ -21,6 +21,7 @@ const DEFAULT_SETTINGS = {
   system_prompt: '',
   sales_phone: process.env.SALES_PHONE_NUMBER || '',
   welcome_message: '',
+  reply_delay: 0,
   hot_score: 8,
   warm_score: 5,
   office_hours_on: false,

@@ -3,9 +3,19 @@
 // ================================================================
 const express = require('express');
 const router  = express.Router();
+const fs      = require('fs');
+const path    = require('path');
 const { getAIReply, getLeadLabel } = require('../ai');
 const { sendText, sendButtons, markRead, alertSales, parseMessage } = require('../whatsapp');
 const db = require('../database');
+
+const SETTINGS_FILE = path.join(__dirname, '../../../settings.json');
+function getReplyDelay() {
+  try {
+    const s = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+    return parseInt(s.reply_delay) || 0;
+  } catch { return 0; }
+}
 
 const processing = new Set(); // prevents duplicate replies
 
@@ -57,6 +67,10 @@ router.post('/', async (req, res) => {
     await db.upsertLead({ phone, name, score: ai.lead_score, label, intent: ai.qualification_stage || 'general' });
 
     console.log(`🤖 Reply (${label} ${ai.lead_score}/10): "${ai.reply_message}"`);
+
+    // Apply reply delay (simulates human typing)
+    const delay = getReplyDelay();
+    if (delay > 0) await new Promise(r => setTimeout(r, delay));
 
     // Send reply — with visit buttons if site visit was offered
     if (ai.site_visit_offered || ai.site_visit_confirmed) {

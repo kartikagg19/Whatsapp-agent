@@ -17,6 +17,34 @@ function getSettings() {
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
+// Always appended to every system prompt — never omit or customise.
+const OUTPUT_FORMAT = `
+
+---
+MANDATORY OUTPUT FORMAT
+
+You MUST reply with ONLY valid JSON matching this exact structure. No extra text, no markdown fences:
+{
+  "reply_message": "<your WhatsApp message — use \\n for line breaks, *bold* for emphasis>",
+  "qualified": true,
+  "qualification_stage": "menu",
+  "budget_range": null,
+  "location_preference": null,
+  "timeline": null,
+  "purpose": null,
+  "site_visit_offered": false,
+  "site_visit_confirmed": false,
+  "preferred_visit_time": null,
+  "rera_query": false,
+  "callback_requested": false,
+  "callback_time": null,
+  "lead_score": 5,
+  "summary": "one line summary of conversation state"
+}
+
+Replace the placeholder values with the actual values for this conversation. lead_score must be an integer 1–10.
+`;
+
 const SYSTEM_PROMPT = `You are Niharika 🌸, a premium WhatsApp AI assistant for Krishna Group, representing the luxury residential project Krishna Aura in Kharghar, Navi Mumbai. You are reaching out to warm leads who visited the Credai Expo.
 
 Your personality: Warm, confident, 28-year-old luxury sales executive. You are NOT a robot — you're a knowledgeable friend who genuinely wants to help the buyer find their dream home. You are consultative, never pushy.
@@ -258,10 +286,11 @@ Ek honest suggestion — site pe aake 45-floor tower ka view dekhein, amenities 
 
 async function callGemini(fullPrompt) {
   const settings = getSettings();
-  const model        = settings.ai_model   || 'gemini-2.5-flash';
-  const systemPrompt = (settings.system_prompt && settings.system_prompt.trim())
+  const model        = settings.ai_model || 'gemini-2.5-flash';
+  const basePrompt   = (settings.system_prompt && settings.system_prompt.trim())
     ? settings.system_prompt
     : SYSTEM_PROMPT;
+  const systemPrompt = basePrompt + OUTPUT_FORMAT;
 
   const response = await ai.models.generateContent({
     model,
@@ -304,11 +333,22 @@ async function getAIReply(userMessage, history = []) {
 
   let parsed;
   try {
-    const clean = raw.replace(/```json|```/g, "").trim();
-    parsed = JSON.parse(
-      clean.slice(clean.indexOf("{"), clean.lastIndexOf("}") + 1),
-    );
-  } catch {
+    if (!raw || !raw.trim()) throw new Error('Empty response from Gemini');
+    const clean = raw.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+    // Try direct parse first (responseMimeType: "application/json" should give clean JSON)
+    try {
+      parsed = JSON.parse(clean);
+    } catch {
+      // Fall back to extracting the JSON object by braces
+      const start = clean.indexOf('{');
+      const end   = clean.lastIndexOf('}');
+      if (start === -1 || end === -1 || end <= start)
+        throw new Error(`No JSON object found. Raw: ${clean.substring(0, 150)}`);
+      parsed = JSON.parse(clean.slice(start, end + 1));
+    }
+  } catch (e) {
+    console.error('❌ JSON parse failed:', e.message);
+    console.error('❌ Raw was:', JSON.stringify(raw).substring(0, 300));
     parsed = {
       reply_message: "Sorry, thoda technical issue aa gaya! Hamari team aapko jald connect karegi. 🙏",
       lead_score: 3,
