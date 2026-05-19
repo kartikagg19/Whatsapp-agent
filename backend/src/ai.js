@@ -4,6 +4,7 @@
 const { GoogleGenAI } = require("@google/genai");
 const fs   = require('fs');
 const path = require('path');
+const { getKnowledgeText } = require('./database');
 
 const SETTINGS_FILE = path.join(__dirname, '../../settings.json');
 
@@ -286,11 +287,17 @@ Ek honest suggestion — site pe aake 45-floor tower ka view dekhein, amenities 
 
 async function callGemini(fullPrompt) {
   const settings = getSettings();
-  const model        = settings.ai_model || 'gemini-2.5-flash';
-  const basePrompt   = (settings.system_prompt && settings.system_prompt.trim())
+  const model      = settings.ai_model || 'gemini-2.5-flash';
+  const basePrompt = (settings.system_prompt && settings.system_prompt.trim())
     ? settings.system_prompt
     : SYSTEM_PROMPT;
-  const systemPrompt = basePrompt + OUTPUT_FORMAT;
+
+  const knowledge = await getKnowledgeText();
+  const knowledgeSection = knowledge
+    ? `\n\n---\nKNOWLEDGE BASE — Use this information to answer questions accurately. Do not invent details not present here:\n\n${knowledge}\n---\n`
+    : '';
+
+  const systemPrompt = basePrompt + knowledgeSection + OUTPUT_FORMAT;
 
   const response = await ai.models.generateContent({
     model,

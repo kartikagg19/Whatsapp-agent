@@ -692,6 +692,7 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
     {k:'prompt',  icon:'ti-file-text',l:'System Prompt'},
     {k:'props',   icon:'ti-building', l:'Properties'},
     {k:'alerts',  icon:'ti-bell',     l:'Alerts & Hours'},
+    {k:'kb',      icon:'ti-database', l:'Knowledge Base'},
   ];
 
   const tabBar=h('div',{className:'stab-bar'},
@@ -871,6 +872,131 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
     )
   );
 
+  // ── KNOWLEDGE BASE TAB ────────────────────────────────────────
+  const KnowledgeTab = () => {
+    const [docs,    setDocs]    = useState(null);
+    const [uploading,setUploading]=useState(false);
+    const [text,    setText]    = useState('');
+    const [textName,setTextName]= useState('');
+    const [dragOver,setDragOver]= useState(false);
+    const fileRef = useRef(null);
+
+    const loadDocs = useCallback(async () => {
+      if(isDemo){setDocs([]);return;}
+      try{const r=await fetch(`${apiBase}/knowledge`);const d=await r.json();setDocs(d.data||[]);}
+      catch{setDocs([]);}
+    },[apiBase,isDemo]);
+
+    useEffect(()=>{loadDocs();},[loadDocs]);
+
+    async function uploadFile(file){
+      if(!file)return;
+      if(isDemo){showToast('Connect backend to upload files','err');return;}
+      setUploading(true);
+      try{
+        const fd=new FormData();fd.append('file',file);
+        const r=await fetch(`${apiBase}/knowledge/upload`,{method:'POST',body:fd});
+        const d=await r.json();
+        if(d.success){showToast(`"${file.name}" uploaded`,'success');loadDocs();}
+        else showToast(d.error||'Upload failed','err');
+      }catch{showToast('Cannot connect to backend','err');}
+      setUploading(false);
+    }
+
+    async function uploadText(){
+      if(!text.trim()||!textName.trim()){showToast('Add a title and content','err');return;}
+      if(isDemo){showToast('Connect backend to save','err');return;}
+      setUploading(true);
+      try{
+        const r=await fetch(`${apiBase}/knowledge/upload`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:textName,content:text})});
+        const d=await r.json();
+        if(d.success){showToast('Entry saved','success');setText('');setTextName('');loadDocs();}
+        else showToast(d.error||'Failed','err');
+      }catch{showToast('Cannot connect to backend','err');}
+      setUploading(false);
+    }
+
+    async function deleteDOC(id,name){
+      if(!confirm(`Delete "${name}"?`))return;
+      try{
+        await fetch(`${apiBase}/knowledge/${id}`,{method:'DELETE'});
+        showToast('Deleted','success');loadDocs();
+      }catch{showToast('Delete failed','err');}
+    }
+
+    const fmt_size=n=>n>1000?`${(n/1000).toFixed(1)}k chars`:`${n} chars`;
+
+    return h('div',{style:{display:'flex',flexDirection:'column',gap:'14px'}},
+      // Upload file card
+      h('div',{className:'card'},
+        h('div',{className:'card-hd'},
+          h('span',{className:'card-title'},'Upload Document'),
+          h('span',{style:{fontSize:'12px',color:'var(--text3)'}},
+            'PDF, TXT — Max 15 MB')
+        ),
+        h('div',{className:'card-bd'},
+          h('div',{
+            style:{border:`2px dashed ${dragOver?'var(--accent)':'var(--border2)'}`,borderRadius:'var(--r2)',
+              padding:'28px',textAlign:'center',cursor:'pointer',transition:'all 0.15s',
+              background:dragOver?'var(--accent-sub)':'var(--surface2)'},
+            onClick:()=>fileRef.current?.click(),
+            onDragOver:e=>{e.preventDefault();setDragOver(true)},
+            onDragLeave:()=>setDragOver(false),
+            onDrop:e=>{e.preventDefault();setDragOver(false);uploadFile(e.dataTransfer.files[0]);}
+          },
+            h('i',{className:'ti ti-cloud-upload',style:{fontSize:'28px',color:'var(--text3)',display:'block',marginBottom:'8px'}}),
+            h('div',{style:{fontSize:'14px',fontWeight:'500',color:'var(--text1)',marginBottom:'4px'}},'Drop file here or click to browse'),
+            h('div',{style:{fontSize:'12px',color:'var(--text3)'}},uploading?'Uploading...':'Supports PDF, TXT files'),
+            uploading&&h('div',{style:{marginTop:'10px',display:'flex',justifyContent:'center'}},h(Spinner))
+          ),
+          h('input',{ref:fileRef,type:'file',accept:'.pdf,.txt',style:{display:'none'},
+            onChange:e=>uploadFile(e.target.files[0])})
+        )
+      ),
+      // Manual text entry card
+      h('div',{className:'card'},
+        h('div',{className:'card-hd'},h('span',{className:'card-title'},'Add Text Entry')),
+        h('div',{className:'card-bd'},
+          h(Field,{label:'Title',hint:'E.g. "Pricing Sheet", "FAQ", "Location Details"'},
+            h('input',{value:textName,onChange:e=>setTextName(e.target.value),placeholder:'Document title...'})),
+          h(Field,{label:'Content'},
+            h('textarea',{value:text,onChange:e=>setText(e.target.value),
+              placeholder:'Paste pricing, property details, FAQs, or any information the bot should know...',
+              style:{minHeight:'120px'}})),
+          h('button',{className:'btn btn-primary',onClick:uploadText,disabled:uploading||!text.trim()||!textName.trim()},
+            uploading?h(Spinner):h('i',{className:'ti ti-plus'}),' Save Entry')
+        )
+      ),
+      // Uploaded docs list
+      h('div',{className:'card'},
+        h('div',{className:'card-hd'},
+          h('span',{className:'card-title'},'Uploaded Documents'),
+          h('button',{className:'btn btn-ghost btn-sm',onClick:loadDocs},h('i',{className:'ti ti-refresh'}),'Refresh')
+        ),
+        docs===null?h('div',{className:'empty'},h(Spinner)):
+        docs.length===0
+          ?h('div',{className:'empty'},
+            h('i',{className:'ti ti-file-off'}),
+            h('p',null,'No documents yet — upload a PDF or add a text entry above'))
+          :h('div',{className:'tbl-wrap'},
+            h('table',null,
+              h('thead',null,h('tr',null,['Name','Type','Size','Uploaded',''].map(c=>h('th',{key:c},c)))),
+              h('tbody',null,docs.map(d=>h('tr',{key:d.id},
+                h('td',{className:'td-name'},d.name),
+                h('td',null,h('span',{className:'badge b-tag'},d.file_type||'text')),
+                h('td',{style:{fontFamily:'var(--mono)',color:'var(--text3)'}},fmt_size(d.size_chars||0)),
+                h('td',{style:{color:'var(--text3)'}},fmt(d.created_at)),
+                h('td',null,h('button',{className:'btn btn-danger btn-sm',onClick:()=>deleteDOC(d.id,d.name)},
+                  h('i',{className:'ti ti-trash'})))
+              )))
+            )
+          )
+      ),
+      isDemo&&h('div',{className:'notice'},h('i',{className:'ti ti-info-circle'}),
+        'Connect your backend to upload real documents. The AI will use them to answer questions accurately.')
+    );
+  };
+
   return h('div',null,
     isDemo&&h('div',{className:'notice'},h('i',{className:'ti ti-info-circle'}),'Demo mode — changes are not saved. Connect your backend in Settings.'),
     tabBar,
@@ -879,6 +1005,7 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
     tab==='prompt'  &&promptTab,
     tab==='props'   &&propsTab,
     tab==='alerts'  &&alertsTab,
+    tab==='kb'      &&h(KnowledgeTab,null),
     saveBar
   );
 };

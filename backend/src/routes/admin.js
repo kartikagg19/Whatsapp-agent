@@ -1,12 +1,16 @@
 // ================================================================
 //  src/routes/admin.js — Dashboard API endpoints
 // ================================================================
-const express = require('express');
-const router  = express.Router();
-const fs      = require('fs');
-const path    = require('path');
-const db      = require('../database');
+const express  = require('express');
+const router   = express.Router();
+const fs       = require('fs');
+const path     = require('path');
+const multer   = require('multer');
+const pdfParse = require('pdf-parse');
+const db       = require('../database');
 const { sendText } = require('../whatsapp');
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
 const SETTINGS_FILE = path.join(__dirname, '../../../settings.json');
 
@@ -115,6 +119,56 @@ router.post('/broadcast', async (req, res) => {
       } catch { failed++; }
     }
     res.json({ success: true, total: leads.length, sent, failed });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── KNOWLEDGE BASE ────────────────────────────────────────────────
+
+// GET /api/knowledge
+router.get('/knowledge', async (req, res) => {
+  try {
+    const docs = await db.getKnowledgeBase();
+    res.json({ success: true, data: docs });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/knowledge/upload — PDF, TXT, or raw text body
+router.post('/knowledge/upload', upload.single('file'), async (req, res) => {
+  try {
+    let content  = '';
+    let fileType = 'manual';
+    let name     = req.body.name || 'Untitled';
+
+    if (req.file) {
+      name     = req.file.originalname;
+      fileType = req.file.mimetype === 'application/pdf' ? 'pdf' : 'text';
+      if (fileType === 'pdf') {
+        const parsed = await pdfParse(req.file.buffer);
+        content = parsed.text;
+      } else {
+        content = req.file.buffer.toString('utf8');
+      }
+    } else if (req.body.content) {
+      content = req.body.content;
+    }
+
+    if (!content.trim()) return res.status(400).json({ error: 'No content found in file' });
+
+    const doc = await db.addKnowledge({
+      name,
+      content: content.trim(),
+      file_type: fileType,
+      size_chars: content.length
+    });
+    res.json({ success: true, data: doc });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE /api/knowledge/:id
+router.delete('/knowledge/:id', async (req, res) => {
+  try {
+    await db.deleteKnowledge(req.params.id);
+    res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

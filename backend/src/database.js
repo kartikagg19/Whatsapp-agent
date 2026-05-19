@@ -70,11 +70,14 @@ async function saveMessage({ phone, role, message, score }) {
   return data;
 }
 
-async function getHistory(phone, limit = 10) {
+async function getHistory(phone, limit = 20) {
   const { data, error } = await getDB().from('conversations')
-    .select('role,message').eq('phone', phone).order('created_at', { ascending: true }).limit(limit);
+    .select('role,message').eq('phone', phone)
+    .order('created_at', { ascending: false }) // newest first
+    .limit(limit);
   if (error) throw error;
-  return (data||[]).map(r => ({ role: r.role, content: r.message }));
+  // reverse so AI receives messages in chronological order
+  return (data||[]).reverse().map(r => ({ role: r.role, content: r.message }));
 }
 
 async function getConversations(phone) {
@@ -84,4 +87,34 @@ async function getConversations(phone) {
   return data || [];
 }
 
-module.exports = { upsertLead, getAllLeads, getLeadByPhone, getStats, saveMessage, getHistory, getConversations };
+// ── KNOWLEDGE BASE ────────────────────────────────────────────────
+
+async function getKnowledgeBase() {
+  const { data, error } = await getDB().from('knowledge_base')
+    .select('*').order('created_at', { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+async function addKnowledge({ name, content, file_type, size_chars }) {
+  const { data, error } = await getDB().from('knowledge_base')
+    .insert({ name, content, file_type, size_chars, created_at: new Date().toISOString() })
+    .select().single();
+  if (error) throw error;
+  return data;
+}
+
+async function deleteKnowledge(id) {
+  const { error } = await getDB().from('knowledge_base').delete().eq('id', id);
+  if (error) throw error;
+}
+
+async function getKnowledgeText() {
+  try {
+    const docs = await getKnowledgeBase();
+    if (!docs.length) return '';
+    return docs.map(d => `### ${d.name}\n${d.content}`).join('\n\n---\n\n');
+  } catch { return ''; }
+}
+
+module.exports = { upsertLead, getAllLeads, getLeadByPhone, getStats, saveMessage, getHistory, getConversations, getKnowledgeBase, addKnowledge, deleteKnowledge, getKnowledgeText };
