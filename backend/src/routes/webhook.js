@@ -56,11 +56,14 @@ router.post('/', async (req, res) => {
   try {
     await markRead(messageId);
 
-    const history = await db.getHistory(phone, 10);
-    console.log(`📚 History loaded: ${history.length} messages`);
+    const [history, existingLead] = await Promise.all([
+      db.getHistory(phone, 20),
+      db.getLeadByPhone(phone)
+    ]);
+    console.log(`📚 History: ${history.length} msgs | Lead: ${existingLead ? existingLead.label : 'NEW'}`);
     await db.saveMessage({ phone, role: 'user', message: text });
 
-    const ai    = await getAIReply(text, history);
+    const ai    = await getAIReply(text, history, existingLead);
     const label = getLeadLabel(ai.lead_score);
 
     await db.saveMessage({ phone, role: 'assistant', message: ai.reply_message, score: ai.lead_score });

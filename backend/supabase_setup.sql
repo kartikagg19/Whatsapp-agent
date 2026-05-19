@@ -28,3 +28,20 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE INDEX IF NOT EXISTS idx_leads_phone   ON leads (phone);
 CREATE INDEX IF NOT EXISTS idx_leads_label   ON leads (label);
 CREATE INDEX IF NOT EXISTS idx_conv_phone    ON conversations (phone);
+
+-- ── KNOWLEDGE BASE ────────────────────────────────────────────────
+-- Stores uploaded PDFs and text documents the AI references per reply.
+
+CREATE TABLE IF NOT EXISTS knowledge_base (
+  id         UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  name       TEXT NOT NULL,
+  content    TEXT NOT NULL,
+  file_type  TEXT DEFAULT 'text',
+  size_chars INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE knowledge_base ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "allow_all" ON knowledge_base FOR ALL USING (true) WITH CHECK (true);
+
+CREATE INDEX IF NOT EXISTS idx_kb_created ON knowledge_base (created_at DESC);
