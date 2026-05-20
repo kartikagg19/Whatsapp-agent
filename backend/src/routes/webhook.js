@@ -7,6 +7,7 @@ const fs      = require('fs');
 const path    = require('path');
 const { getAIReply, getLeadLabel } = require('../ai');
 const { sendText, sendButtons, markRead, alertSales, parseMessage } = require('../whatsapp');
+const { syncTimeline } = require('../crmClient');
 const db = require('../database');
 
 const SETTINGS_FILE = path.join(__dirname, '../../../settings.json');
@@ -92,6 +93,38 @@ router.post('/', async (req, res) => {
       alertSales(process.env.SALES_PHONE_NUMBER, { phone, name, score: ai.lead_score * 10, intent: ai.qualification_stage || 'general' })
         .catch(e => console.warn('⚠️  Sales alert failed:', e.message));
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // Sync to CRM timeline (fire-and-forget, errors logged but not thrown)
+    // ────────────────────────────────────────────────────────────────
+
+    // Call A: Inbound user message
+    syncTimeline({
+      phone,
+      direction: 'inbound',
+      message: text,
+      call_id: `wa-in-${messageId}`,
+      occurred_at: new Date().toISOString()
+    }).catch(() => {}); // fire-and-forget
+
+    // Call B: Outbound AI reply
+    syncTimeline({
+      phone,
+      direction: 'outbound',
+      message: ai.reply_message,
+      call_id: `wa-out-${messageId}`,
+      // Bot scores 1-10; CRM expects an integer 0-100. Guard against non-numbers.
+      ai_score: (typeof ai.lead_score === 'number' && isFinite(ai.lead_score))
+        ? Math.round(ai.lead_score * 10)
+        : null,
+      intent: ai.qualification_stage,
+      qualified: !!ai.qualified,
+      summary: ai.summary,
+      profile_patch: {
+        budget_range: ai.budget_range
+      },
+      occurred_at: new Date().toISOString()
+    }).catch(() => {}); // fire-and-forget
 
   } catch (err) {
     console.error('❌ Processing error:', err.message);

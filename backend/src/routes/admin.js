@@ -14,6 +14,32 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 
 
 const SETTINGS_FILE = path.join(__dirname, '../../../settings.json');
 
+// ────────────────────────────────────────────────────────────────
+// In-memory dedupe for POST /api/send (call_id idempotency)
+// Maps call_id → timestamp. Entries older than 24h are pruned.
+// ────────────────────────────────────────────────────────────────
+const dedupeMap = new Map();
+const DEDUPE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+function checkAndRecordCallId(callId) {
+  if (!callId) return false; // no call_id = not deduped
+  const now = Date.now();
+  const lastSent = dedupeMap.get(callId);
+  if (lastSent && now - lastSent < DEDUPE_TTL_MS) {
+    return true; // duplicate within 24h
+  }
+  dedupeMap.set(callId, now);
+  // Prune old entries every 100 calls to prevent memory leak
+  if (dedupeMap.size > 1000) {
+    for (const [key, timestamp] of dedupeMap) {
+      if (now - timestamp >= DEDUPE_TTL_MS) {
+        dedupeMap.delete(key);
+      }
+    }
+  }
+  return false; // first send
+}
+
 const DEFAULT_SETTINGS = {
   bot_name: 'Niharika',
   business_name: 'Krishna Group',
@@ -45,6 +71,27 @@ function loadSettings() {
   } catch {}
   return { ...DEFAULT_SETTINGS };
 }
+
+// GET /api — API root status
+router.get('/', (req, res) => {
+  res.json({ 
+    status: 'online', 
+    service: 'DreamHome Bot API',
+    version: '1.0',
+    endpoints: [
+      'GET /api/stats',
+      'GET /api/leads',
+      'GET /api/leads/:phone',
+      'GET /api/agent-settings',
+      'POST /api/agent-settings',
+      'POST /api/send',
+      'POST /api/broadcast',
+      'GET /api/knowledge',
+      'POST /api/knowledge/upload',
+      'DELETE /api/knowledge/:id'
+    ]
+  });
+});
 
 // GET /api/agent-settings
 router.get('/agent-settings', (req, res) => {
@@ -90,16 +137,110 @@ router.get('/leads/:phone', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// POST /api/send — manual message to one lead
-// Body: { phone: "91xxxxxxxxxx", message: "Hello..." }
+// POST /api/send — trigger a WhatsApp message (CRM or dashboard)
+// ────────────────────────────────────────────────────────────────
+// CRM FLOW (PropelloCRM integration):
+//   Header: X-Webhook-Secret = CRM_WEBHOOK_SECRET
+//   Body: {
+//     phone: "91xxxxxxxxxx",
+//     message: "Hello...",
+//     call_id: "unique-id-for-idempotency",     (optional, CRM uses for dedupe)
+//     template: "campaign_name"                 (optional, for analytics)
+//   }
+//
+// DASHBOARD FLOW (legacy):
+//   No auth header (dashboard will be updated to send one, or see §7 risk)
+//   Body: { phone: "91xxxxxxxxxx", message: "Hello..." }
+//
+// Behavior:
+//   - Reject if X-Webhook-Secret provided but doesn't match CRM_WEBHOOK_SECRET
+//   - If call_id seen in last 24h, return 200 { success: true, deduped: true }
+//   - On Meta failure, return 200 { success: false, error: "..." }
+// ────────────────────────────────────────────────────────────────
+
 router.post('/send', async (req, res) => {
   try {
-    const { phone, message } = req.body;
-    if (!phone || !message) return res.status(400).json({ error: 'phone and message required' });
-    await sendText(phone, message);
-    await db.saveMessage({ phone, role: 'assistant', message: `[MANUAL] ${message}` });
+    const { phone, message, call_id, template } = req.body;
+    const headerSecret = req.headers['x-webhook-secret'];
+    const crmSecret = process.env.CRM_WEBHOOK_SECRET || '';
+    const isCrmTrigger = !!headerSecret;
+    const timestamp = new Date().toISOString();
+
+    // Log incoming request
+    if (isCrmTrigger) {
+      console.log(`\n📨 ╔═══════════════════════════════════════════`);
+      console.log(`   ║ CRM TRIGGER RECEIVED`);
+      console.log(`   ║ Time: ${timestamp}`);
+      console.log(`   ║ Phone: ${phone}`);
+      console.log(`   ║ Call ID: ${call_id || 'none'}`);
+      console.log(`   ║ Template: ${template || 'none'}`);
+      console.log(`   ╚═══════════════════════════════════════════\n`);
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // AC1: Validate secret if provided (CRM flow) or if CRM is enabled
+    // ──────────────────────────────────────────────────────────────
+    if (headerSecret && headerSecret !== crmSecret) {
+      console.error(`❌ CRM Auth Failed: Invalid X-Webhook-Secret for phone ${phone}`);
+      return res.status(403).json({ error: 'Invalid X-Webhook-Secret' });
+    }
+
+    // For backward compatibility during transition: if headerSecret is provided,
+    // we know it's CRM. If not, assume it's dashboard (legacy). Once all clients
+    // send the header, we can enforce it for all calls.
+
+    if (!phone || !message) {
+      console.warn(`⚠️  Missing required fields: phone=${phone}, message=${message}`);
+      return res.status(400).json({ error: 'phone and message required' });
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // AC2 & AC3: Check dedupe (if call_id provided, honor 24h window)
+    // ──────────────────────────────────────────────────────────────
+    const isDuplicate = checkAndRecordCallId(call_id);
+    if (isDuplicate) {
+      console.log(`⏭️  DEDUPE: call_id=${call_id} already sent within 24h → skipping`);
+      return res.status(200).json({ success: true, deduped: true });
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // Send to Meta and save locally
+    // ──────────────────────────────────────────────────────────────
+    let sendError = null;
+    let metaSuccess = false;
+    try {
+      await sendText(phone, message);
+      metaSuccess = true;
+      console.log(`✅ Message sent to ${phone} via Meta WhatsApp`);
+    } catch (err) {
+      sendError = err.message || 'Meta API error';
+      console.error(`❌ SEND FAILED to ${phone}:`, sendError);
+    }
+
+    // Always save locally, even if Meta failed. CRM sent the request,
+    // so we record it happened (or was attempted) locally.
+    const msgPrefix = call_id ? `[CRM ${call_id}]` : '[MANUAL]';
+    const msgWithTemplate = template ? `${msgPrefix} [${template}] ${message}` : `${msgPrefix} ${message}`;
+    await db.saveMessage({ phone, role: 'assistant', message: msgWithTemplate });
+    console.log(`💾 Message saved to database for ${phone}`);
+
+    // ──────────────────────────────────────────────────────────────
+    // AC4: Always return 200 even on Meta failure (CRM treats 2xx as delivered)
+    // ──────────────────────────────────────────────────────────────
+    if (sendError) {
+      console.warn(`⚠️  CRM Request processed but Meta failed: ${sendError}`);
+      return res.status(200).json({ success: false, error: sendError });
+    }
+
+    if (isCrmTrigger) {
+      console.log(`✨ CRM Trigger completed successfully for ${phone}\n`);
+    }
     res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    // Unexpected error — log but still return 200 if CRM is involved
+    console.error('💥 SEND Unexpected error:', e.message);
+    res.status(200).json({ success: false, error: e.message });
+  }
 });
 
 // POST /api/broadcast — send to all leads in a tier
