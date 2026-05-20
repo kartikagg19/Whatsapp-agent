@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl.exe -s http://localhost:3000)",
+      "Bash(ConvertFrom-Json)",
+      "Bash(ConvertTo-Json)",
+      "Bash(curl -s http://localhost:3000/api)",
+      "Bash(curl -s http://localhost:3000/api/leads)"
+    ]
+  }
+}
