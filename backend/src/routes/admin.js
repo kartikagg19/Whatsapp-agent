@@ -90,7 +90,7 @@ function getToken() {
 }
 
 function requireAuth(req, res, next) {
-  if (req.path === '/login' || req.path === '/whatsapp-test') return next();
+  if (req.path === '/login' || req.path === '/whatsapp-test' || req.path === '/ai-test') return next();
   const token = (req.headers['authorization'] || '').replace('Bearer ', '').trim();
   if (!token || token !== getToken()) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -109,6 +109,21 @@ router.post('/login', (req, res) => {
     return res.json({ success: true, token: getToken() });
   }
   res.status(401).json({ error: 'Invalid email or password' });
+});
+
+// GET /api/ai-test — verify Gemini API key works
+router.get('/ai-test', async (req, res) => {
+  try {
+    const { GoogleGenAI } = require('@google/genai');
+    const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const response = await client.models.generateContent({
+      model: 'gemini-1.5-flash',
+      contents: [{ role: 'user', parts: [{ text: 'Reply with just the word: OK' }] }],
+    });
+    res.json({ ok: true, reply: response.text, key_set: !!process.env.GEMINI_API_KEY });
+  } catch (err) {
+    res.json({ ok: false, error: err.message, key_set: !!process.env.GEMINI_API_KEY });
+  }
 });
 
 // GET /api/whatsapp-test — verify token + phone number ID are working
