@@ -303,14 +303,14 @@ const LeadModal = ({lead,apiBase,isDemo,onClose,showToast}) => {
   const [busy,setBusy]=useState(false);
   useEffect(()=>{
     if(isDemo){setConvos(DEMO_CONVOS);return;}
-    fetch(`${apiBase}/leads/${lead.phone}`).then(r=>r.json()).then(d=>setConvos(d.data?.conversations||[])).catch(()=>setConvos([]));
+    apiFetch(`${apiBase}/leads/${lead.phone}`).then(r=>r.json()).then(d=>setConvos(d.data?.conversations||[])).catch(()=>setConvos([]));
   },[lead.phone,isDemo]);
   async function send(){
     if(!msg.trim()||busy)return;
     if(isDemo){showToast('Demo mode — connect backend to send messages','err');return;}
     setBusy(true);
     try{
-      const r=await fetch(`${apiBase}/send`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:lead.phone,message:msg})});
+      const r=await apiFetch(`${apiBase}/send`,{method:'POST',body:JSON.stringify({phone:lead.phone,message:msg})});
       const d=await r.json();
       if(d.success){showToast('Message sent','success');setMsg('');}
       else showToast(d.error||'Failed','err');
@@ -376,7 +376,7 @@ const BroadcastModal = ({apiBase,isDemo,onClose,showToast,leads}) => {
     if(isDemo){showToast('Demo mode — connect backend to broadcast','err');return;}
     setBusy(true);setResult(null);
     try{
-      const r=await fetch(`${apiBase}/broadcast`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({label:tier,message:msg})});
+      const r=await apiFetch(`${apiBase}/broadcast`,{method:'POST',body:JSON.stringify({label:tier,message:msg})});
       const d=await r.json();
       if(d.success){setResult(d);showToast(`Sent to ${d.sent} leads`,'success');}
       else showToast(d.error||'Failed','err');
@@ -432,7 +432,7 @@ const ConnectModal = ({apiBase,setApiBase,onClose,showToast}) => {
     if(!target){setApiBase('DEMO');showToast('Switched to demo mode','success');onClose();return;}
     setTesting(true);setStatus(null);
     try{
-      const r=await fetch(`${target}/stats`);
+      const r=await apiFetch(`${target}/stats`);
       if(r.ok){setApiBase(target);localStorage.setItem('pa_api',target);setStatus({ok:true});showToast('Connected','success');setTimeout(onClose,900);}
       else setStatus({ok:false,msg:`HTTP ${r.status}`});
     }catch{setStatus({ok:false,msg:'Cannot reach server'});}
@@ -571,18 +571,50 @@ const LeadsPage = ({leads,loading,onSelect}) => {
   );
 };
 
+/* ─── AUTH HELPER ─────────────────────────────────────────────── */
+function getAuthToken(){ return localStorage.getItem('pa_token')||''; }
+function apiFetch(url, opts={}){
+  const token=getAuthToken();
+  const headers={'Content-Type':'application/json',...(opts.headers||{})};
+  if(token) headers['Authorization']=`Bearer ${token}`;
+  // don't override Content-Type for FormData
+  if(opts.body instanceof FormData) delete headers['Content-Type'];
+  return fetch(url,{...opts,headers});
+}
+
 /* ─── LOGIN PAGE ──────────────────────────────────────────────── */
 const LoginPage = ({onLogin}) => {
+  const savedApi=localStorage.getItem('pa_api')||'';
+  const [url,  setUrl]  =useState(savedApi);
   const [email,setEmail]=useState('');
   const [pass, setPass] =useState('');
   const [err,  setErr]  =useState('');
-  function login(){
-    if(email.trim()==='shardul@propello.ai'&&pass==='admin123'){
-      localStorage.setItem('pa_auth','shardul');
-      onLogin();
-    } else {
-      setErr('Invalid email or password');
-    }
+  const [busy, setBusy] =useState(false);
+  async function login(){
+    setErr('');
+    if(!email.trim()||!pass){setErr('Enter email and password');return;}
+    const base=(url||'').trim().replace(/\/$/,'');
+    if(!base){setErr('Enter your backend URL first');return;}
+    setBusy(true);
+    try{
+      const r=await fetch(`${base}/login`,{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({email:email.trim(),password:pass})});
+      const d=await r.json();
+      if(r.ok&&d.token){
+        localStorage.setItem('pa_api',base);
+        localStorage.setItem('pa_token',d.token);
+        onLogin(base,d.token);
+      } else {
+        setErr(d.error||'Invalid email or password');
+      }
+    }catch{setErr('Cannot reach server. Check the backend URL.');}
+    setBusy(false);
+  }
+  function demo(){
+    localStorage.removeItem('pa_api');
+    localStorage.removeItem('pa_token');
+    onLogin('DEMO','');
   }
   return h('div',{className:'login-wrap'},
     h('div',{className:'login-box'},
@@ -596,16 +628,23 @@ const LoginPage = ({onLogin}) => {
       h('div',{className:'login-title'},'Welcome back'),
       h('div',{className:'login-sub'},'Sign in to access your dashboard'),
       err&&h('div',{className:'login-err'},err),
+      h(Field,{label:'Backend URL'},
+        h('input',{type:'url',value:url,onChange:e=>{setUrl(e.target.value);setErr('');},
+          placeholder:'https://your-app.up.railway.app/api',onKeyDown:e=>e.key==='Enter'&&login()})
+      ),
       h(Field,{label:'Email'},
         h('input',{type:'email',value:email,onChange:e=>{setEmail(e.target.value);setErr('');},
-          placeholder:'shardul@propello.ai',onKeyDown:e=>e.key==='Enter'&&login()})
+          placeholder:'admin@propello.ai',onKeyDown:e=>e.key==='Enter'&&login()})
       ),
       h(Field,{label:'Password'},
         h('input',{type:'password',value:pass,onChange:e=>{setPass(e.target.value);setErr('');},
           placeholder:'••••••••',onKeyDown:e=>e.key==='Enter'&&login()})
       ),
-      h('button',{className:'btn btn-primary',style:{width:'100%',justifyContent:'center',padding:'10px',fontSize:'14px',marginTop:'4px'},onClick:login},
-        'Sign in')
+      h('button',{className:'btn btn-primary',style:{width:'100%',justifyContent:'center',padding:'10px',fontSize:'14px',marginTop:'4px'},onClick:login,disabled:busy},
+        busy?h(Spinner):'Sign in'),
+      h('div',{style:{textAlign:'center',marginTop:'14px'}},
+        h('button',{className:'btn btn-ghost btn-sm',onClick:demo},'Try Demo (no login)')
+      )
     )
   );
 };
@@ -664,7 +703,7 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
 
   useEffect(()=>{
     if(isDemo){setS({...AGENT_DEFAULTS});return;}
-    fetch(`${apiBase}/agent-settings`).then(r=>r.json()).then(d=>setS(d.data||{...AGENT_DEFAULTS})).catch(()=>setS({...AGENT_DEFAULTS}));
+    apiFetch(`${apiBase}/agent-settings`).then(r=>r.json()).then(d=>setS(d.data||{...AGENT_DEFAULTS})).catch(()=>setS({...AGENT_DEFAULTS}));
   },[apiBase,isDemo]);
 
   const set=(k,v)=>setS(p=>({...p,[k]:v}));
@@ -676,7 +715,7 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
     if(isDemo){showToast('Demo mode — connect backend to save','err');return;}
     setSaving(true);
     try{
-      const r=await fetch(`${apiBase}/agent-settings`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(s)});
+      const r=await apiFetch(`${apiBase}/agent-settings`,{method:'POST',body:JSON.stringify(s)});
       const d=await r.json();
       if(d.success)showToast('Settings saved — bot updated','success');
       else showToast(d.error||'Save failed','err');
@@ -883,7 +922,7 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
 
     const loadDocs = useCallback(async () => {
       if(isDemo){setDocs([]);return;}
-      try{const r=await fetch(`${apiBase}/knowledge`);const d=await r.json();setDocs(d.data||[]);}
+      try{const r=await apiFetch(`${apiBase}/knowledge`);const d=await r.json();setDocs(d.data||[]);}
       catch{setDocs([]);}
     },[apiBase,isDemo]);
 
@@ -895,7 +934,7 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
       setUploading(true);
       try{
         const fd=new FormData();fd.append('file',file);
-        const r=await fetch(`${apiBase}/knowledge/upload`,{method:'POST',body:fd});
+        const r=await apiFetch(`${apiBase}/knowledge/upload`,{method:'POST',body:fd});
         const d=await r.json();
         if(d.success){showToast(`"${file.name}" uploaded`,'success');loadDocs();}
         else showToast(d.error||'Upload failed','err');
@@ -908,7 +947,7 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
       if(isDemo){showToast('Connect backend to save','err');return;}
       setUploading(true);
       try{
-        const r=await fetch(`${apiBase}/knowledge/upload`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:textName,content:text})});
+        const r=await apiFetch(`${apiBase}/knowledge/upload`,{method:'POST',body:JSON.stringify({name:textName,content:text})});
         const d=await r.json();
         if(d.success){showToast('Entry saved','success');setText('');setTextName('');loadDocs();}
         else showToast(d.error||'Failed','err');
@@ -919,7 +958,7 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
     async function deleteDOC(id,name){
       if(!confirm(`Delete "${name}"?`))return;
       try{
-        await fetch(`${apiBase}/knowledge/${id}`,{method:'DELETE'});
+        await apiFetch(`${apiBase}/knowledge/${id}`,{method:'DELETE'});
         showToast('Deleted','success');loadDocs();
       }catch{showToast('Delete failed','err');}
     }
@@ -1013,9 +1052,20 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
 /* ─── APP ROOT ────────────────────────────────────────────────── */
 function App(){
   const savedApi=localStorage.getItem('pa_api');
-  const [loggedIn, setLoggedIn]=useState(!!localStorage.getItem('pa_auth'));
+  const savedToken=localStorage.getItem('pa_token');
+  const [loggedIn, setLoggedIn]=useState(!!(savedToken&&savedApi)||savedApi==='DEMO'||(!savedApi&&!savedToken&&false));
   const [page,     setPage]  =useState('overview');
   const [apiBase,  setApiBase]=useState(savedApi||'DEMO');
+  function handleLogin(base,token){
+    setApiBase(base);
+    setLoggedIn(true);
+  }
+  function handleLogout(){
+    localStorage.removeItem('pa_auth');
+    localStorage.removeItem('pa_token');
+    setLoggedIn(false);
+    setApiBase('DEMO');
+  }
   const [leads,    setLeads] =useState(DEMO_LEADS);
   const [stats,    setStats] =useState(DEMO_STATS);
   const [loading,  setLoading]=useState(false);
@@ -1030,7 +1080,7 @@ function App(){
     if(isDemo){setLeads(DEMO_LEADS);setStats(DEMO_STATS);return;}
     setLoading(true);
     try{
-      const [sr,lr]=await Promise.all([fetch(`${apiBase}/stats`),fetch(`${apiBase}/leads`)]);
+      const [sr,lr]=await Promise.all([apiFetch(`${apiBase}/stats`),apiFetch(`${apiBase}/leads`)]);
       if(sr.ok&&lr.ok){const[sd,ld]=await Promise.all([sr.json(),lr.json()]);setStats(sd.data);setLeads(ld.data||[]);}
     }catch(e){console.warn('Fetch failed:',e.message);}
     setLoading(false);
@@ -1052,7 +1102,7 @@ function App(){
     'agent-settings':{title:'Agent Settings', sub:'Configure your AI bot'},
   };
 
-  if(!loggedIn) return h(LoginPage,{onLogin:()=>setLoggedIn(true)});
+  if(!loggedIn) return h(LoginPage,{onLogin:handleLogin});
 
   return h('div',{className:'app'},
     h('aside',{className:'sidebar'},
@@ -1080,7 +1130,9 @@ function App(){
         h('div',{className:'conn-pill'},
           h('div',{className:`dot ${isDemo?'demo':'on'}`}),
           h('span',{className:'conn-label'},isDemo?'Demo mode':'Live')
-        )
+        ),
+        h('button',{className:'nav-btn',style:{marginTop:'6px',color:'var(--hot)'},onClick:handleLogout},
+          h('i',{className:'ti ti-logout'}),'Sign out')
       )
     ),
     h('main',{className:'main'},

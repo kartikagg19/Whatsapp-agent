@@ -82,6 +82,35 @@ function loadSettings() {
   return { ...DEFAULT_SETTINGS };
 }
 
+// ── AUTH ─────────────────────────────────────────────────────────
+
+function getToken() {
+  const pass = process.env.ADMIN_PASSWORD || 'propello2025';
+  return Buffer.from(`propello-dashboard:${pass}`).toString('base64');
+}
+
+function requireAuth(req, res, next) {
+  if (req.path === '/login') return next();
+  const token = (req.headers['authorization'] || '').replace('Bearer ', '').trim();
+  if (!token || token !== getToken()) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+
+router.use(requireAuth);
+
+// POST /api/login
+router.post('/login', (req, res) => {
+  const { email, password } = req.body || {};
+  const adminEmail = process.env.ADMIN_EMAIL    || 'admin@propello.ai';
+  const adminPass  = process.env.ADMIN_PASSWORD || 'propello2025';
+  if (email === adminEmail && password === adminPass) {
+    return res.json({ success: true, token: getToken() });
+  }
+  res.status(401).json({ error: 'Invalid email or password' });
+});
+
 // GET /api — API root status
 router.get('/', (req, res) => {
   res.json({ 
