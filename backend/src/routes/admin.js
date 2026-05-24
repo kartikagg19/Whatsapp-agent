@@ -90,7 +90,8 @@ function getToken() {
 }
 
 function requireAuth(req, res, next) {
-  if (req.path === '/login' || req.path === '/whatsapp-test' || req.path === '/ai-test') return next();
+  // Skip auth for login, tests, and CRM webhook (which uses X-Webhook-Secret instead)
+  if (req.path === '/login' || req.path === '/whatsapp-test' || req.path === '/ai-test' || req.path === '/send') return next();
   const token = (req.headers['authorization'] || '').replace('Bearer ', '').trim();
   if (!token || token !== getToken()) {
     return res.status(401).json({ error: 'Unauthorized' });
