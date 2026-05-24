@@ -201,7 +201,12 @@ async function callGemini(fullPrompt) {
       responseMimeType: "application/json",
     },
   });
-  return response.text || "";
+  return {
+    text:         response.text || "",
+    inputTokens:  response.usageMetadata?.promptTokenCount     || 0,
+    outputTokens: response.usageMetadata?.candidatesTokenCount || 0,
+    model
+  };
 }
 
 async function getAIReply(userMessage, history = [], lead = null) {
@@ -235,9 +240,13 @@ async function getAIReply(userMessage, history = [], lead = null) {
   const fullPrompt = sessionBlock + contextBlock + '\nUser: ' + userMessage;
 
   let raw = '';
+  let inputTokens = 0, outputTokens = 0;
   for (let attempt = 1; attempt <= 4; attempt++) {
     try {
-      raw = await callGemini(fullPrompt);
+      const result = await callGemini(fullPrompt);
+      raw = result.text;
+      inputTokens = result.inputTokens;
+      outputTokens = result.outputTokens;
       break;
     } catch (err) {
       const is503 = err.message && err.message.includes('503');
@@ -284,7 +293,9 @@ async function getAIReply(userMessage, history = [], lead = null) {
     };
   }
 
-  parsed.lead_score = Math.max(1, Math.min(10, parseInt(parsed.lead_score) || 3));
+  parsed.lead_score    = Math.max(1, Math.min(10, parseInt(parsed.lead_score) || 3));
+  parsed.input_tokens  = inputTokens;
+  parsed.output_tokens = outputTokens;
   return parsed;
 }
 

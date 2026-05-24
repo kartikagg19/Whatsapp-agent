@@ -182,6 +182,12 @@ router.post('/agent-settings', (req, res) => {
   }
 });
 
+// GET /api/costs — token usage and cost analytics
+router.get('/costs', async (req, res) => {
+  try { res.json({ success: true, data: await db.getCostStats() }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /api/stats — counts of total, hot, warm, cold
 router.get('/stats', async (req, res) => {
   try { res.json({ success: true, data: await db.getStats() }); }

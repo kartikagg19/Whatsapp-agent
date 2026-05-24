@@ -87,7 +87,7 @@ router.post('/', async (req, res) => {
     console.log(`🤖 Reply (${label} ${ai.lead_score}/10): "${ai.reply_message}"`);
 
     // Step 5: save reply + upsert lead (non-critical — don't block sending)
-    db.saveMessage({ phone, role: 'assistant', message: ai.reply_message, score: ai.lead_score })
+    db.saveMessage({ phone, role: 'assistant', message: ai.reply_message, score: ai.lead_score, input_tokens: ai.input_tokens, output_tokens: ai.output_tokens })
       .catch(e => console.warn('⚠️ save reply failed:', e.message));
     db.upsertLead({
       phone, name, score: ai.lead_score, label, intent: ai.qualification_stage || 'general',

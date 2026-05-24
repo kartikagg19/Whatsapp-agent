@@ -68,12 +68,56 @@ async function getStats() {
 
 // ── CONVERSATIONS ─────────────────────────────────────────────────
 
-async function saveMessage({ phone, role, message, score }) {
-  const { data, error } = await getDB().from('conversations')
-    .insert({ phone, role, message, score: score||null, created_at: new Date().toISOString() })
-    .select().single();
+async function saveMessage({ phone, role, message, score, input_tokens, output_tokens }) {
+  const row = { phone, role, message, score: score||null, created_at: new Date().toISOString() };
+  if (input_tokens)  row.input_tokens  = input_tokens;
+  if (output_tokens) row.output_tokens = output_tokens;
+  const { data, error } = await getDB().from('conversations').insert(row).select().single();
   if (error) throw error;
   return data;
+}
+
+async function getCostStats() {
+  const { data, error } = await getDB()
+    .from('conversations')
+    .select('phone, role, input_tokens, output_tokens, created_at');
+  if (error) throw error;
+  const rows = (data || []).filter(r => r.input_tokens || r.output_tokens);
+
+  const INPUT_PER_TOKEN  = 0.10 / 1_000_000; // USD
+  const OUTPUT_PER_TOKEN = 0.40 / 1_000_000; // USD
+  const USD_TO_INR = 84;
+
+  const byPhone = {};
+  let totalInput = 0, totalOutput = 0;
+
+  for (const r of rows) {
+    const inp = r.input_tokens  || 0;
+    const out = r.output_tokens || 0;
+    totalInput  += inp;
+    totalOutput += out;
+    if (!byPhone[r.phone]) byPhone[r.phone] = { phone: r.phone, input_tokens: 0, output_tokens: 0, messages: 0 };
+    byPhone[r.phone].input_tokens  += inp;
+    byPhone[r.phone].output_tokens += out;
+    byPhone[r.phone].messages++;
+  }
+
+  const calcCost = (inp, out) => ({
+    usd: parseFloat((inp * INPUT_PER_TOKEN + out * OUTPUT_PER_TOKEN).toFixed(6)),
+    inr: parseFloat(((inp * INPUT_PER_TOKEN + out * OUTPUT_PER_TOKEN) * USD_TO_INR).toFixed(4))
+  });
+
+  const perLead = Object.values(byPhone).map(l => ({
+    ...l,
+    cost: calcCost(l.input_tokens, l.output_tokens)
+  })).sort((a, b) => b.cost.usd - a.cost.usd);
+
+  const total = calcCost(totalInput, totalOutput);
+  const avgPerConversation = perLead.length
+    ? calcCost(totalInput / perLead.length, totalOutput / perLead.length)
+    : { usd: 0, inr: 0 };
+
+  return { total, avgPerConversation, perLead, totalConversations: perLead.length };
 }
 
 async function getHistory(phone, limit = 20) {
@@ -170,4 +214,4 @@ async function markFollowUpSent(phone) {
   if (error) throw error;
 }
 
-module.exports = { upsertLead, getAllLeads, getLeadByPhone, getStats, saveMessage, getHistory, getConversations, getKnowledgeBase, addKnowledge, deleteKnowledge, getKnowledgeText, uploadToStorage, getLeadsForFollowUp, markFollowUpSent };
+module.exports = { upsertLead, getAllLeads, getLeadByPhone, getStats, saveMessage, getHistory, getConversations, getKnowledgeBase, addKnowledge, deleteKnowledge, getKnowledgeText, uploadToStorage, getLeadsForFollowUp, markFollowUpSent, getCostStats };

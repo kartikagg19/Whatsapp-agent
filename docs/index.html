@@ -1049,6 +1049,104 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
   );
 };
 
+/* ─── COSTS PAGE ─────────────────────────────────────────────── */
+const CostsPage = ({apiBase,isDemo}) => {
+  const [data,setData]=useState(null);
+  const [loading,setLoading]=useState(true);
+  const [view,setView]=useState('per-lead'); // 'per-lead' | 'summary'
+
+  useEffect(()=>{
+    if(isDemo){setData(null);setLoading(false);return;}
+    apiFetch(`${apiBase}/costs`).then(r=>r.json()).then(d=>{setData(d.data||null);setLoading(false);}).catch(()=>setLoading(false));
+  },[apiBase,isDemo]);
+
+  const fmt_usd=v=>`$${(v||0).toFixed(4)}`;
+  const fmt_inr=v=>`₹${(v||0).toFixed(3)}`;
+  const fmt_tok=v=>v>=1000?`${(v/1000).toFixed(1)}k`:String(v||0);
+
+  if(loading) return h('div',{className:'empty'},h(Spinner));
+  if(isDemo) return h('div',{className:'empty'},h('i',{className:'ti ti-currency-dollar',style:{fontSize:'32px',color:'var(--text3)'}}),h('p',null,'Connect backend to view cost analytics'));
+  if(!data)  return h('div',{className:'empty'},h('i',{className:'ti ti-alert-circle',style:{fontSize:'32px',color:'var(--text3)'}}),h('p',null,'No cost data yet — costs appear after conversations'));
+
+  return h('div',null,
+    // Summary cards
+    h('div',{className:'stats-row',style:{gridTemplateColumns:'repeat(4,1fr)'}},
+      h('div',{className:'stat'},
+        h('div',{className:'stat-label'},'Total Spend'),
+        h('div',{className:'stat-val',style:{fontSize:'22px'}},fmt_inr(data.total.inr)),
+        h('div',{className:'stat-meta'},fmt_usd(data.total.usd))
+      ),
+      h('div',{className:'stat'},
+        h('div',{className:'stat-label'},'Avg / Conversation'),
+        h('div',{className:'stat-val',style:{fontSize:'22px'}},fmt_inr(data.avgPerConversation.inr)),
+        h('div',{className:'stat-meta'},fmt_usd(data.avgPerConversation.usd))
+      ),
+      h('div',{className:'stat'},
+        h('div',{className:'stat-label'},'Total Leads Tracked'),
+        h('div',{className:'stat-val'},data.totalConversations),
+        h('div',{className:'stat-meta'},'with token data')
+      ),
+      h('div',{className:'stat'},
+        h('div',{className:'stat-label'},'Model Pricing'),
+        h('div',{className:'stat-val',style:{fontSize:'16px',letterSpacing:0}},'Gemini 2.0'),
+        h('div',{className:'stat-meta'},'$0.10/1M in · $0.40/1M out')
+      )
+    ),
+
+    // View toggle + table
+    h('div',{className:'card'},
+      h('div',{className:'card-hd'},
+        h('span',{className:'card-title'},'Cost Breakdown'),
+        h('div',{style:{display:'flex',gap:'6px'}},
+          h('button',{className:`btn btn-sm ${view==='per-lead'?'btn-primary':'btn-ghost'}`,onClick:()=>setView('per-lead')},'Per Lead'),
+          h('button',{className:`btn btn-sm ${view==='summary'?'btn-primary':'btn-ghost'}`,onClick:()=>setView('summary')},'Summary')
+        )
+      ),
+      h('div',{style:{overflowX:'auto'}},
+        view==='per-lead'
+          ? h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:'13px'}},
+              h('thead',null,h('tr',null,
+                ['Phone','Input Tokens','Output Tokens','Messages','Cost (₹)','Cost ($)'].map(col=>
+                  h('th',{key:col,style:{padding:'10px 16px',textAlign:'left',borderBottom:'1px solid var(--border)',color:'var(--text3)',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.06em'}},col)
+                )
+              )),
+              h('tbody',null,
+                (data.perLead||[]).map((l,i)=>
+                  h('tr',{key:l.phone,style:{background:i%2===0?'transparent':'var(--surface2)'}},
+                    h('td',{style:{padding:'10px 16px',fontFamily:'var(--mono)',fontSize:'12px'}},l.phone),
+                    h('td',{style:{padding:'10px 16px',fontFamily:'var(--mono)',color:'var(--text2)'}},fmt_tok(l.input_tokens)),
+                    h('td',{style:{padding:'10px 16px',fontFamily:'var(--mono)',color:'var(--text2)'}},fmt_tok(l.output_tokens)),
+                    h('td',{style:{padding:'10px 16px',fontFamily:'var(--mono)',color:'var(--text2)'}},l.messages),
+                    h('td',{style:{padding:'10px 16px',fontWeight:600,color:'var(--green)'}},fmt_inr(l.cost.inr)),
+                    h('td',{style:{padding:'10px 16px',fontFamily:'var(--mono)',color:'var(--text3)',fontSize:'11px'}},fmt_usd(l.cost.usd))
+                  )
+                )
+              )
+            )
+          : h('div',{style:{padding:'24px 16px'}},
+              h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'16px'}},
+                h('div',{style:{padding:'16px',background:'var(--surface2)',borderRadius:'var(--r)',border:'1px solid var(--border)'}},
+                  h('div',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)',marginBottom:'8px'}},'TOTAL INPUT TOKENS'),
+                  h('div',{style:{fontSize:'24px',fontWeight:700,fontFamily:'var(--mono)'}},fmt_tok((data.perLead||[]).reduce((s,l)=>s+l.input_tokens,0))),
+                  h('div',{style:{fontSize:'11px',color:'var(--text3)',marginTop:'4px'}},'$0.10 per 1M tokens')
+                ),
+                h('div',{style:{padding:'16px',background:'var(--surface2)',borderRadius:'var(--r)',border:'1px solid var(--border)'}},
+                  h('div',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)',marginBottom:'8px'}},'TOTAL OUTPUT TOKENS'),
+                  h('div',{style:{fontSize:'24px',fontWeight:700,fontFamily:'var(--mono)'}},fmt_tok((data.perLead||[]).reduce((s,l)=>s+l.output_tokens,0))),
+                  h('div',{style:{fontSize:'11px',color:'var(--text3)',marginTop:'4px'}},'$0.40 per 1M tokens')
+                ),
+                h('div',{style:{padding:'16px',background:'var(--green-bg)',borderRadius:'var(--r)',border:'1px solid #BBF7D0',gridColumn:'1/-1'}},
+                  h('div',{style:{fontSize:'11px',color:'var(--green)',fontFamily:'var(--mono)',marginBottom:'4px'}},'TOTAL COST BREAKDOWN'),
+                  h('div',{style:{fontSize:'20px',fontWeight:700,color:'var(--green)'}},`${fmt_inr(data.total.inr)}  ·  ${fmt_usd(data.total.usd)}`),
+                  h('div',{style:{fontSize:'12px',color:'var(--green)',marginTop:'4px'}},`Across ${data.totalConversations} conversations · Avg ${fmt_inr(data.avgPerConversation.inr)} per conversation`)
+                )
+              )
+            )
+      )
+    )
+  );
+};
+
 /* ─── APP ROOT ────────────────────────────────────────────────── */
 function App(){
   const savedApi=localStorage.getItem('pa_api');
@@ -1094,12 +1192,14 @@ function App(){
     {key:'pipeline',      icon:'ti-layout-kanban',   label:'Pipeline'},
     {key:'leads',         icon:'ti-users',            label:'All Leads',badge:hotCount||null},
     {key:'agent-settings',icon:'ti-robot',            label:'Agent Settings'},
+    {key:'costs',         icon:'ti-currency-rupee',   label:'Cost Analytics'},
   ];
   const META={
     overview:        {title:'Overview',       sub:'Real-time lead pipeline'},
     pipeline:        {title:'Pipeline',       sub:'Leads by stage'},
     leads:           {title:'All Leads',      sub:`${leads.length} total`},
     'agent-settings':{title:'Agent Settings', sub:'Configure your AI bot'},
+    costs:           {title:'Cost Analytics', sub:'Token usage & spend per conversation'},
   };
 
   if(!loggedIn) return h(LoginPage,{onLogin:handleLogin});
@@ -1155,7 +1255,8 @@ function App(){
         page==='overview'       ?h(Overview,         {stats,leads,loading,onSelect:setSelected,isDemo}):
         page==='pipeline'       ?h(PipelinePage,     {leads,loading,onSelect:setSelected}):
         page==='leads'          ?h(LeadsPage,        {leads,loading,onSelect:setSelected}):
-        page==='agent-settings' ?h(AgentSettingsPage,{apiBase,isDemo,showToast}):null
+        page==='agent-settings' ?h(AgentSettingsPage,{apiBase,isDemo,showToast}):
+        page==='costs'          ?h(CostsPage,        {apiBase,isDemo}):null
       )
     ),
     selected  &&h(LeadModal,     {lead:selected,apiBase,isDemo,onClose:()=>setSelected(null),showToast}),
