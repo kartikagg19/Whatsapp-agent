@@ -102,10 +102,11 @@ async function getKnowledgeBase() {
   return data || [];
 }
 
-async function addKnowledge({ name, content, file_type, size_chars }) {
+async function addKnowledge({ name, content, file_type, size_chars, file_url }) {
+  const row = { name, content, file_type, size_chars, created_at: new Date().toISOString() };
+  if (file_url) row.file_url = file_url;
   const { data, error } = await getDB().from('knowledge_base')
-    .insert({ name, content, file_type, size_chars, created_at: new Date().toISOString() })
-    .select().single();
+    .insert(row).select().single();
   if (error) throw error;
   return data;
 }
