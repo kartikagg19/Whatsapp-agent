@@ -90,7 +90,7 @@ function getToken() {
 }
 
 function requireAuth(req, res, next) {
-  if (req.path === '/login') return next();
+  if (req.path === '/login' || req.path === '/whatsapp-test') return next();
   const token = (req.headers['authorization'] || '').replace('Bearer ', '').trim();
   if (!token || token !== getToken()) {
     return res.status(401).json({ error: 'Unauthorized' });
