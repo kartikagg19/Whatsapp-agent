@@ -111,6 +111,23 @@ router.post('/login', (req, res) => {
   res.status(401).json({ error: 'Invalid email or password' });
 });
 
+// GET /api/whatsapp-test — verify token + phone number ID are working
+router.get('/whatsapp-test', async (req, res) => {
+  const axios = require('axios');
+  const token = process.env.WHATSAPP_TOKEN;
+  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  if (!token || !phoneId) return res.json({ ok: false, error: 'WHATSAPP_TOKEN or WHATSAPP_PHONE_NUMBER_ID not set in env' });
+  try {
+    const r = await axios.get(`https://graph.facebook.com/v20.0/${phoneId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    res.json({ ok: true, phone_number: r.data.display_phone_number, verified_name: r.data.verified_name, quality: r.data.quality_rating });
+  } catch (err) {
+    const meta = err.response?.data?.error;
+    res.json({ ok: false, error: meta?.message || err.message, code: meta?.code });
+  }
+});
+
 // GET /api — API root status
 router.get('/', (req, res) => {
   res.json({ 
@@ -233,6 +250,11 @@ router.post('/send', async (req, res) => {
       return res.status(400).json({ error: 'phone and message required' });
     }
 
+    // Normalize phone: strip spaces, dashes, +; add 91 if 10-digit India number
+    const cleanPhone = phone.replace(/[\s\-\+]/g, '');
+    const normalizedPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
+    if (normalizedPhone !== phone) console.log(`📞 Phone normalized: ${phone} → ${normalizedPhone}`);
+
     // ──────────────────────────────────────────────────────────────
     // AC2 & AC3: Check dedupe (if call_id provided, honor 24h window)
     // ──────────────────────────────────────────────────────────────
@@ -248,19 +270,25 @@ router.post('/send', async (req, res) => {
     let sendError = null;
     let metaSuccess = false;
     try {
-      await sendText(phone, message);
+      await sendText(normalizedPhone, message);
       metaSuccess = true;
-      console.log(`✅ Message sent to ${phone} via Meta WhatsApp`);
+      console.log(`✅ Message sent to ${normalizedPhone} via Meta WhatsApp`);
     } catch (err) {
-      sendError = err.message || 'Meta API error';
-      console.error(`❌ SEND FAILED to ${phone}:`, sendError);
+      // Extract the real Meta error message for the dashboard
+      const metaErr = err.response?.data?.error;
+      sendError = metaErr
+        ? `Meta error ${metaErr.code}: ${metaErr.message}`
+        : (err.message || 'Meta API error');
+      console.error(`❌ SEND FAILED to ${normalizedPhone}:`, sendError);
     }
 
-    // Always save locally, even if Meta failed. CRM sent the request,
-    // so we record it happened (or was attempted) locally.
-    const msgPrefix = call_id ? `[CRM ${call_id}]` : '[MANUAL]';
-    const msgWithTemplate = template ? `${msgPrefix} [${template}] ${message}` : `${msgPrefix} ${message}`;
-    await db.saveMessage({ phone, role: 'assistant', message: msgWithTemplate });
+    // Save locally only if actually sent — avoid showing failed messages as sent
+    if (metaSuccess) {
+      const msgPrefix = call_id ? `[CRM ${call_id}]` : '[MANUAL]';
+      const msgWithTemplate = template ? `${msgPrefix} [${template}] ${message}` : `${msgPrefix} ${message}`;
+      await db.saveMessage({ phone: normalizedPhone, role: 'assistant', message: msgWithTemplate });
+      console.log(`💾 Message saved to database for ${normalizedPhone}`);
+    }
     console.log(`💾 Message saved to database for ${phone}`);
 
     // ──────────────────────────────────────────────────────────────
