@@ -13,7 +13,22 @@ const { startFollowUpScheduler } = require('./followup');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+const ALLOWED_ORIGINS = [
+  'https://whatsappagent-livid.vercel.app',
+  'http://localhost:5500',
+  'http://127.0.0.1:5500',
+  'http://localhost:3000',
+];
+app.use(cors({
+  origin: (origin, cb) => {
+    // allow requests with no origin (mobile apps, curl, Postman)
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    cb(new Error('CORS: origin not allowed'));
+  },
+  methods: ['GET','POST','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization','X-Webhook-Secret'],
+  credentials: true
+}));
 app.use(morgan('dev'));
 app.use('/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
