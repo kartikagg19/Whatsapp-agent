@@ -55,94 +55,93 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    await markRead(messageId);
+    // Step 1: mark read (non-critical — don't let it block)
+    markRead(messageId).catch(e => console.warn('⚠️ markRead failed:', e.message));
 
-    const [history, existingLead] = await Promise.all([
-      db.getHistory(phone, 20),
-      db.getLeadByPhone(phone)
-    ]);
+    // Step 2: load history + lead from DB
+    let history = [], existingLead = null;
+    try {
+      [history, existingLead] = await Promise.all([
+        db.getHistory(phone, 20),
+        db.getLeadByPhone(phone)
+      ]);
+    } catch (e) {
+      console.error('❌ DB read failed:', e.message);
+    }
     console.log(`📚 History: ${history.length} msgs | Lead: ${existingLead ? existingLead.label : 'NEW'}`);
-    await db.saveMessage({ phone, role: 'user', message: text });
 
-    const ai    = await getAIReply(text, history, existingLead);
+    // Step 3: save incoming message (non-critical)
+    db.saveMessage({ phone, role: 'user', message: text }).catch(e => console.warn('⚠️ saveMessage failed:', e.message));
+
+    // Step 4: get AI reply
+    let ai;
+    try {
+      ai = await getAIReply(text, history, existingLead);
+    } catch (e) {
+      console.error('❌ AI failed:', e.message);
+      await sendText(phone, 'Ek second ji, thoda busy hoon. Aap dobara message karein please 🙏').catch(() => {});
+      return;
+    }
+
     const label = getLeadLabel(ai.lead_score);
+    console.log(`🤖 Reply (${label} ${ai.lead_score}/10): "${ai.reply_message}"`);
 
-    await db.saveMessage({ phone, role: 'assistant', message: ai.reply_message, score: ai.lead_score });
-    await db.upsertLead({
+    // Step 5: save reply + upsert lead (non-critical — don't block sending)
+    db.saveMessage({ phone, role: 'assistant', message: ai.reply_message, score: ai.lead_score })
+      .catch(e => console.warn('⚠️ save reply failed:', e.message));
+    db.upsertLead({
       phone, name, score: ai.lead_score, label, intent: ai.qualification_stage || 'general',
       budget_range:        ai.budget_range        || undefined,
       location_preference: ai.location_preference || undefined,
       timeline:            ai.timeline            || undefined,
       purpose:             ai.purpose             || undefined
-    });
+    }).catch(e => console.warn('⚠️ upsertLead failed:', e.message));
 
-    console.log(`🤖 Reply (${label} ${ai.lead_score}/10): "${ai.reply_message}"`);
-
-    // Apply reply delay (simulates human typing)
+    // Step 6: apply reply delay
     const delay = getReplyDelay();
     if (delay > 0) await new Promise(r => setTimeout(r, delay));
 
-    // Send document if AI flagged one (brochure/unit plan request)
+    // Step 7: send document if AI flagged one
     if (ai.send_document) {
       const docName = ai.send_document.split('/').pop() || 'document.pdf';
-      await sendDocument(phone, ai.send_document, docName, '').catch(e =>
-        console.warn('⚠️  Document send failed:', e.message)
+      sendDocument(phone, ai.send_document, docName, '').catch(e =>
+        console.warn('⚠️ Document send failed:', e.message)
       );
     }
 
-    // Send reply — with visit buttons if site visit was offered
-    if (ai.site_visit_offered || ai.site_visit_confirmed) {
-      await sendText(phone, ai.reply_message);
-      await sendButtons(phone, '📅 Site visit ke liye time choose karein:', [
-        { id: 'saturday', title: 'Saturday' },
-        { id: 'sunday',   title: 'Sunday'   },
-        { id: 'weekday',  title: 'Weekday'  }
-      ]);
-    } else {
-      await sendText(phone, ai.reply_message);
+    // Step 8: send reply
+    try {
+      if (ai.site_visit_offered || ai.site_visit_confirmed) {
+        await sendText(phone, ai.reply_message);
+        await sendButtons(phone, '📅 Site visit ke liye time choose karein:', [
+          { id: 'saturday', title: 'Saturday' },
+          { id: 'sunday',   title: 'Sunday'   },
+          { id: 'weekday',  title: 'Weekday'  }
+        ]);
+      } else {
+        await sendText(phone, ai.reply_message);
+      }
+    } catch (e) {
+      console.error('❌ sendText failed:', e.response?.data || e.message);
     }
 
-    // Alert sales for HOT leads
+    // Step 9: sales alert for HOT leads
     if (label === 'HOT' && process.env.SALES_PHONE_NUMBER) {
       alertSales(process.env.SALES_PHONE_NUMBER, { phone, name, score: ai.lead_score * 10, intent: ai.qualification_stage || 'general' })
-        .catch(e => console.warn('⚠️  Sales alert failed:', e.message));
+        .catch(e => console.warn('⚠️ Sales alert failed:', e.message));
     }
 
-    // ────────────────────────────────────────────────────────────────
-    // Sync to CRM timeline (fire-and-forget, errors logged but not thrown)
-    // ────────────────────────────────────────────────────────────────
-
-    // Call A: Inbound user message
+    // Step 10: CRM sync (fire-and-forget)
+    syncTimeline({ phone, direction: 'inbound', message: text, call_id: `wa-in-${messageId}`, occurred_at: new Date().toISOString() }).catch(() => {});
     syncTimeline({
-      phone,
-      direction: 'inbound',
-      message: text,
-      call_id: `wa-in-${messageId}`,
-      occurred_at: new Date().toISOString()
-    }).catch(() => {}); // fire-and-forget
-
-    // Call B: Outbound AI reply
-    syncTimeline({
-      phone,
-      direction: 'outbound',
-      message: ai.reply_message,
-      call_id: `wa-out-${messageId}`,
-      // Bot scores 1-10; CRM expects an integer 0-100. Guard against non-numbers.
-      ai_score: (typeof ai.lead_score === 'number' && isFinite(ai.lead_score))
-        ? Math.round(ai.lead_score * 10)
-        : null,
-      intent: ai.qualification_stage,
-      qualified: !!ai.qualified,
-      summary: ai.summary,
-      profile_patch: {
-        budget_range: ai.budget_range
-      },
-      occurred_at: new Date().toISOString()
-    }).catch(() => {}); // fire-and-forget
+      phone, direction: 'outbound', message: ai.reply_message, call_id: `wa-out-${messageId}`,
+      ai_score: (typeof ai.lead_score === 'number' && isFinite(ai.lead_score)) ? Math.round(ai.lead_score * 10) : null,
+      intent: ai.qualification_stage, qualified: !!ai.qualified, summary: ai.summary,
+      profile_patch: { budget_range: ai.budget_range }, occurred_at: new Date().toISOString()
+    }).catch(() => {});
 
   } catch (err) {
-    console.error('❌ Processing error:', err.message);
-    sendText(phone, "I'm having a small issue. Our team will reach you very soon! 🙏").catch(() => {});
+    console.error('❌ Unexpected error:', err.message);
   }
 });
 
