@@ -4,13 +4,18 @@
 const express  = require('express');
 const router   = express.Router();
 const fs       = require('fs');
+const os       = require('os');
 const path     = require('path');
 const multer   = require('multer');
 const pdfParse = require('pdf-parse');
 const db       = require('../database');
 const { sendText } = require('../whatsapp');
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+const diskStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, os.tmpdir()),
+  filename:    (req, file, cb) => cb(null, `upload_${Date.now()}_${file.originalname}`)
+});
+const upload = multer({ storage: diskStorage, limits: { fileSize: 250 * 1024 * 1024 } });
 
 const SETTINGS_FILE = path.join(__dirname, '../../../settings.json');
 
@@ -61,7 +66,12 @@ const DEFAULT_SETTINGS = {
     { name: '2 BHK Cat 1', size: '1075 sq ft', price: '₹1.21 Crore' },
     { name: '2 BHK Cat 2', size: '1275 sq ft', price: '₹1.42 Crore' },
     { name: '3 BHK',       size: '1850 sq ft', price: '₹2.02 Crore' },
-  ]
+  ],
+  followup_enabled:     false,
+  followup_hot_hours:   24,
+  followup_warm_hours:  48,
+  followup_cold_hours:  72,
+  followup_check_hours: 6
 };
 
 function loadSettings() {
@@ -275,19 +285,31 @@ router.get('/knowledge', async (req, res) => {
 
 // POST /api/knowledge/upload — PDF, TXT, or raw text body
 router.post('/knowledge/upload', upload.single('file'), async (req, res) => {
+  let tempPath = null;
   try {
     let content  = '';
     let fileType = 'manual';
     let name     = req.body.name || 'Untitled';
+    let file_url = null;
 
     if (req.file) {
+      tempPath = req.file.path;
       name     = req.file.originalname;
       fileType = req.file.mimetype === 'application/pdf' ? 'pdf' : 'text';
+      const fileBuffer = fs.readFileSync(tempPath);
+
       if (fileType === 'pdf') {
-        const parsed = await pdfParse(req.file.buffer);
+        const parsed = await pdfParse(fileBuffer);
         content = parsed.text;
+        // Also upload original PDF to Supabase Storage so it can be sent to users
+        try {
+          file_url = await db.uploadToStorage(name, fileBuffer, 'application/pdf');
+          console.log(`📤 PDF uploaded to storage: ${file_url}`);
+        } catch (storageErr) {
+          console.warn('⚠️  Storage upload failed (text still saved):', storageErr.message);
+        }
       } else {
-        content = req.file.buffer.toString('utf8');
+        content = fileBuffer.toString('utf8');
       }
     } else if (req.body.content) {
       content = req.body.content;
@@ -299,10 +321,16 @@ router.post('/knowledge/upload', upload.single('file'), async (req, res) => {
       name,
       content: content.trim(),
       file_type: fileType,
-      size_chars: content.length
+      size_chars: content.length,
+      file_url
     });
     res.json({ success: true, data: doc });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    console.error('Knowledge upload error:', e.message);
+    res.status(500).json({ error: e.message });
+  } finally {
+    if (tempPath) try { fs.unlinkSync(tempPath); } catch {}
+  }
 });
 
 // DELETE /api/knowledge/:id

@@ -6,7 +6,7 @@ const router  = express.Router();
 const fs      = require('fs');
 const path    = require('path');
 const { getAIReply, getLeadLabel } = require('../ai');
-const { sendText, sendButtons, markRead, alertSales, parseMessage } = require('../whatsapp');
+const { sendText, sendDocument, sendButtons, markRead, alertSales, parseMessage } = require('../whatsapp');
 const { syncTimeline } = require('../crmClient');
 const db = require('../database');
 
@@ -68,13 +68,27 @@ router.post('/', async (req, res) => {
     const label = getLeadLabel(ai.lead_score);
 
     await db.saveMessage({ phone, role: 'assistant', message: ai.reply_message, score: ai.lead_score });
-    await db.upsertLead({ phone, name, score: ai.lead_score, label, intent: ai.qualification_stage || 'general' });
+    await db.upsertLead({
+      phone, name, score: ai.lead_score, label, intent: ai.qualification_stage || 'general',
+      budget_range:        ai.budget_range        || undefined,
+      location_preference: ai.location_preference || undefined,
+      timeline:            ai.timeline            || undefined,
+      purpose:             ai.purpose             || undefined
+    });
 
     console.log(`🤖 Reply (${label} ${ai.lead_score}/10): "${ai.reply_message}"`);
 
     // Apply reply delay (simulates human typing)
     const delay = getReplyDelay();
     if (delay > 0) await new Promise(r => setTimeout(r, delay));
+
+    // Send document if AI flagged one (brochure/unit plan request)
+    if (ai.send_document) {
+      const docName = ai.send_document.split('/').pop() || 'document.pdf';
+      await sendDocument(phone, ai.send_document, docName, '').catch(e =>
+        console.warn('⚠️  Document send failed:', e.message)
+      );
+    }
 
     // Send reply — with visit buttons if site visit was offered
     if (ai.site_visit_offered || ai.site_visit_confirmed) {

@@ -75,4 +75,18 @@ function parseMessage(body) {
   } catch { return null; }
 }
 
-module.exports = { sendText, sendButtons, markRead, alertSales, parseMessage };
+// Send a document (PDF/file) from a public URL
+async function sendDocument(to, fileUrl, filename, caption) {
+  try {
+    await axios.post(`${API}/${PHONE()}/messages`, {
+      messaging_product: 'whatsapp', to, type: 'document',
+      document: { link: fileUrl, filename: filename || 'document.pdf', caption: caption || '' }
+    }, { headers: HEADER() });
+    console.log(`📎 Document sent to ${to}: ${filename}`);
+  } catch (err) {
+    console.error(`❌ Document send failed to ${to}:`, err.response?.data || err.message);
+    throw err;
+  }
+}
+
+module.exports = { sendText, sendDocument, sendButtons, markRead, alertSales, parseMessage };

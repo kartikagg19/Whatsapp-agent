@@ -16,20 +16,26 @@ const getDB = () => {
 
 // ── LEADS ────────────────────────────────────────────────────────
 
-async function upsertLead({ phone, name, score, label, intent }) {
+async function upsertLead({ phone, name, score, label, intent, budget_range, location_preference, timeline, purpose }) {
   const d   = getDB();
   const now = new Date().toISOString();
   const { data: ex } = await d.from('leads').select('id,message_count').eq('phone', phone).single();
 
+  const extras = {};
+  if (budget_range)        extras.budget_range        = budget_range;
+  if (location_preference) extras.location_preference = location_preference;
+  if (timeline)            extras.timeline            = timeline;
+  if (purpose)             extras.purpose             = purpose;
+
   if (ex) {
     const { data, error } = await d.from('leads')
-      .update({ name: name || undefined, score, label, intent, message_count: (ex.message_count||0)+1, last_message: now, updated_at: now })
+      .update({ name: name || undefined, score, label, intent, ...extras, message_count: (ex.message_count||0)+1, last_message: now, updated_at: now })
       .eq('phone', phone).select().single();
     if (error) throw error;
     return data;
   } else {
     const { data, error } = await d.from('leads')
-      .insert({ phone, name: name||'Unknown', score, label, intent, message_count: 1, last_message: now, created_at: now, updated_at: now })
+      .insert({ phone, name: name||'Unknown', score, label, intent, ...extras, message_count: 1, last_message: now, created_at: now, updated_at: now })
       .select().single();
     if (error) throw error;
     return data;
@@ -113,8 +119,54 @@ async function getKnowledgeText() {
   try {
     const docs = await getKnowledgeBase();
     if (!docs.length) return '';
-    return docs.map(d => `### ${d.name}\n${d.content}`).join('\n\n---\n\n');
+    const textDocs = docs.filter(d => d.content);
+    const fileDocs = docs.filter(d => d.file_url);
+    let result = textDocs.map(d => `### ${d.name}\n${d.content}`).join('\n\n---\n\n');
+    if (fileDocs.length) {
+      result += '\n\n---\nFILES YOU CAN SEND (set send_document to the file_url when user asks for brochure/unit plan):\n' +
+        fileDocs.map(d => `- ${d.name}: ${d.file_url}`).join('\n');
+    }
+    return result;
   } catch { return ''; }
 }
 
-module.exports = { upsertLead, getAllLeads, getLeadByPhone, getStats, saveMessage, getHistory, getConversations, getKnowledgeBase, addKnowledge, deleteKnowledge, getKnowledgeText };
+// Upload file buffer to Supabase Storage
+async function uploadToStorage(filename, buffer, mimetype) {
+  const { data, error } = await getDB().storage
+    .from('documents')
+    .upload(filename, buffer, { contentType: mimetype, upsert: true });
+  if (error) throw error;
+  const { data: urlData } = getDB().storage.from('documents').getPublicUrl(filename);
+  return urlData.publicUrl;
+}
+
+// Find leads that need a follow-up based on inactivity
+async function getLeadsForFollowUp({ coldHours = 72, warmHours = 48, hotHours = 24 } = {}) {
+  const now = new Date();
+  const { data, error } = await getDB().from('leads')
+    .select('*')
+    .order('last_message', { ascending: true });
+  if (error) throw error;
+  return (data || []).filter(lead => {
+    const lastMsg = lead.last_message ? new Date(lead.last_message) : null;
+    if (!lastMsg) return false;
+    const hoursAgo = (now - lastMsg) / 3600000;
+    const threshold = lead.label === 'HOT' ? hotHours : lead.label === 'WARM' ? warmHours : coldHours;
+    // Only follow up if enough time has passed AND not already followed up recently
+    const lastFollowUp = lead.follow_up_sent_at ? new Date(lead.follow_up_sent_at) : null;
+    if (lastFollowUp) {
+      const followUpHoursAgo = (now - lastFollowUp) / 3600000;
+      if (followUpHoursAgo < threshold) return false;
+    }
+    return hoursAgo >= threshold;
+  });
+}
+
+async function markFollowUpSent(phone) {
+  const { error } = await getDB().from('leads')
+    .update({ follow_up_sent_at: new Date().toISOString() })
+    .eq('phone', phone);
+  if (error) throw error;
+}
+
+module.exports = { upsertLead, getAllLeads, getLeadByPhone, getStats, saveMessage, getHistory, getConversations, getKnowledgeBase, addKnowledge, deleteKnowledge, getKnowledgeText, uploadToStorage, getLeadsForFollowUp, markFollowUpSent };

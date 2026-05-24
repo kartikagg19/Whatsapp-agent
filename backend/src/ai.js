@@ -40,10 +40,16 @@ You MUST reply with ONLY valid JSON matching this exact structure. No extra text
   "callback_requested": false,
   "callback_time": null,
   "lead_score": 5,
-  "summary": "one line summary of conversation state"
+  "summary": "one line summary of conversation state",
+  "send_document": null
 }
 
 Replace the placeholder values with the actual values for this conversation. lead_score must be an integer 1–10.
+
+SEND_DOCUMENT RULES:
+- Set "send_document" to the exact file URL from the KNOWLEDGE BASE "FILES YOU CAN SEND" section ONLY when the user explicitly asks for a brochure, unit plan, floor plan, or price list.
+- If no matching file exists, leave it null — never invent a URL.
+- When sending a document, also include a brief reply_message telling the user what you are sending.
 `;
 
 // Generic NEPQ-based system prompt — project-specific KB lives in the knowledge_base table.
@@ -202,6 +208,12 @@ async function getAIReply(userMessage, history = [], lead = null) {
   // Inject known lead profile so AI never loses qualification context
   let sessionBlock = '';
   if (lead) {
+    const known = [];
+    if (lead.budget_range)        known.push(`Budget: ${lead.budget_range}`);
+    if (lead.location_preference) known.push(`Location preference: ${lead.location_preference}`);
+    if (lead.timeline)            known.push(`Timeline: ${lead.timeline}`);
+    if (lead.purpose)             known.push(`Purpose: ${lead.purpose}`);
+
     sessionBlock =
       '\n\n[CALL SESSION — what we already know about this lead]\n' +
       `Name: ${lead.name || 'Unknown'}\n` +
@@ -209,7 +221,8 @@ async function getAIReply(userMessage, history = [], lead = null) {
       `Stage: ${lead.label || 'COLD'}\n` +
       `Intent: ${(lead.intent || 'general').replace('_', ' ')}\n` +
       `Total messages exchanged: ${lead.message_count || 0}\n` +
-      '[END CALL SESSION — do NOT re-ask questions already answered]\n';
+      (known.length ? `Already extracted:\n${known.map(k => `  - ${k}`).join('\n')}\n` : '') +
+      '[END CALL SESSION — do NOT re-ask any question whose answer is already listed above]\n';
   }
 
   let contextBlock = '';

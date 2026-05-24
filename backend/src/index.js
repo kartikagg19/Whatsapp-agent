@@ -8,6 +8,7 @@ const morgan  = require('morgan');
 
 const webhookRouter = require('./routes/webhook');
 const adminRouter   = require('./routes/admin');
+const { startFollowUpScheduler } = require('./followup');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -33,5 +34,6 @@ app.listen(PORT, () => {
   console.log(`✅ Server   : http://localhost:${PORT}`);
   console.log(`📡 Webhook  : http://localhost:${PORT}/webhook`);
   console.log(`🔑 Token    : ${process.env.WEBHOOK_VERIFY_TOKEN}`);
-  console.log(`🤖 AI Model : Claude Haiku\n`);
+  console.log(`🤖 AI Model : Gemini 2.5 Flash\n`);
+  startFollowUpScheduler();
 });
