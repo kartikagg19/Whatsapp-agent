@@ -137,12 +137,12 @@ router.post('/', async (req, res) => {
     }
 
     // Step 10: CRM sync (fire-and-forget)
-    syncTimeline({ phone, direction: 'inbound', message: text, call_id: `wa-in-${messageId}`, occurred_at: new Date().toISOString() }).catch(() => {});
+    syncTimeline({ phone, direction: 'inbound', message: text, call_id: `wa-in-${messageId}` }).catch(() => {});
     syncTimeline({
       phone, direction: 'outbound', message: ai.reply_message, call_id: `wa-out-${messageId}`,
       ai_score: (typeof ai.lead_score === 'number' && isFinite(ai.lead_score)) ? Math.round(ai.lead_score * 10) : null,
       intent: ai.qualification_stage, qualified: !!ai.qualified, summary: ai.summary,
-      profile_patch: { budget_range: ai.budget_range }, occurred_at: new Date().toISOString()
+      profile_patch: { budget_range: ai.budget_range }
     }).catch(() => {});
 
   } catch (err) {
