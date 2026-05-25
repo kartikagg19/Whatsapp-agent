@@ -134,7 +134,7 @@ router.get('/ai-test', async (req, res) => {
     const { GoogleGenAI } = require('@google/genai');
     const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     const response = await client.models.generateContent({
-      model: 'gemini-2.0-flash',
+      model: 'gemini-2.5-flash',
       contents: [{ role: 'user', parts: [{ text: 'Reply with just the word: OK' }] }],
     });
     res.json({ ok: true, reply: response.text, key_set: !!process.env.GEMINI_API_KEY });

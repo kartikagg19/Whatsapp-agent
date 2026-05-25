@@ -183,7 +183,7 @@ SECTION 8 — STRICT RULES
 
 async function callGemini(fullPrompt) {
   const settings = getSettings();
-  const model      = settings.ai_model || 'gemini-2.0-flash';
+  const model      = settings.ai_model || 'gemini-2.5-flash';
   const basePrompt = (settings.system_prompt && settings.system_prompt.trim())
     ? settings.system_prompt
     : SYSTEM_PROMPT;
