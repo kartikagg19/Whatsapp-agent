@@ -90,8 +90,7 @@ function getToken() {
 }
 
 function requireAuth(req, res, next) {
-  // Skip auth for login, tests, and CRM webhook (which uses X-Webhook-Secret instead)
-  if (req.path === '/login' || req.path === '/whatsapp-test' || req.path === '/ai-test' || req.path === '/send') return next();
+  if (req.path === '/login' || req.path === '/whatsapp-test' || req.path === '/ai-test' || req.path === '/send' || req.path === '/kb-debug') return next();
   const token = (req.headers['authorization'] || '').replace('Bearer ', '').trim();
   if (!token || token !== getToken()) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -110,6 +109,23 @@ router.post('/login', (req, res) => {
     return res.json({ success: true, token: getToken() });
   }
   res.status(401).json({ error: 'Invalid email or password' });
+});
+
+// GET /api/kb-debug — show what AI sees in knowledge base (file_url check)
+router.get('/kb-debug', async (req, res) => {
+  try {
+    const docs = await db.getKnowledgeBase();
+    const { getKnowledgeText } = require('../database');
+    res.json({
+      total: docs.length,
+      docs: docs.map(d => ({
+        id: d.id, name: d.name, file_type: d.file_type,
+        has_content: !!d.content, content_length: d.content?.length || 0,
+        has_file_url: !!d.file_url, file_url: d.file_url || null
+      })),
+      sendable_count: docs.filter(d => d.file_url).length
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // GET /api/ai-test — verify Gemini API key works

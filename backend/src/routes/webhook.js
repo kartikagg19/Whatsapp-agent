@@ -103,10 +103,15 @@ router.post('/', async (req, res) => {
 
     // Step 7: send document if AI flagged one
     if (ai.send_document) {
-      const docName = ai.send_document.split('/').pop() || 'document.pdf';
-      sendDocument(phone, ai.send_document, docName, '').catch(e =>
-        console.warn('⚠️ Document send failed:', e.message)
-      );
+      const docName = decodeURIComponent(ai.send_document.split('/').pop()) || 'document.pdf';
+      try {
+        await sendDocument(phone, ai.send_document, docName, '');
+        console.log(`📎 Document sent: ${docName}`);
+      } catch (e) {
+        console.warn('⚠️ Document send failed, sending link as text:', e.message);
+        // Fallback: send the URL as plain text so user can still download
+        await sendText(phone, `📎 ${docName}\n\nYahan se download karein:\n${ai.send_document}`).catch(() => {});
+      }
     }
 
     // Step 8: send reply

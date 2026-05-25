@@ -46,10 +46,12 @@ You MUST reply with ONLY valid JSON matching this exact structure. No extra text
 
 Replace the placeholder values with the actual values for this conversation. lead_score must be an integer 1–10.
 
-SEND_DOCUMENT RULES:
-- Set "send_document" to the exact file URL from the KNOWLEDGE BASE "FILES YOU CAN SEND" section ONLY when the user explicitly asks for a brochure, unit plan, floor plan, or price list.
-- If no matching file exists, leave it null — never invent a URL.
-- When sending a document, also include a brief reply_message telling the user what you are sending.
+SEND_DOCUMENT RULES (CRITICAL — follow exactly):
+- If user asks for brochure, unit plan, floor plan, price list, PDF, or any document → look in the KNOWLEDGE BASE for "FILES YOU CAN SEND" section → copy the EXACT URL → set "send_document" to that URL.
+- Example: user says "brochure bhejo" or "unit plan chahiye" or "PDF do" → set send_document to the matching file URL.
+- If the FILES YOU CAN SEND section is missing or has no matching file → set send_document to null.
+- NEVER invent or guess a URL. NEVER leave it null if a matching file exists.
+- Always write a reply_message telling the user you are sending the file.
 `;
 
 // Generic NEPQ-based system prompt — project-specific KB lives in the knowledge_base table.
