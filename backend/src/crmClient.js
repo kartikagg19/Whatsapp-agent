@@ -42,15 +42,18 @@ async function syncTimeline(payload) {
     const url = `${config.baseUrl}/api/whatsapp/timeline`;
     const headers = { 'X-Webhook-Secret': config.secret, 'Content-Type': 'application/json' };
 
-    await axios.post(url, payload, {
+    console.log(`[CRM] 📤 Syncing ${payload.direction}: ${payload.phone} | "${payload.message?.substring(0, 50)}..."`);
+
+    const response = await axios.post(url, payload, {
       headers,
       timeout: config.timeoutMs
     });
 
-    console.log(`[CRM] ✓ Timeline sync: ${payload.direction} | ${payload.phone} | call_id=${payload.call_id || 'N/A'}`);
+    console.log(`[CRM] ✅ Timeline synced: ${payload.direction} | ${payload.phone} | activity_id=${response.data?.activity_id}`);
   } catch (error) {
     // Log the failure but never throw — bot continues replying
-    console.error(`[CRM timeline sync failed] ${payload.phone} | ${error.code || error.message}`);
+    const errorMsg = error.response?.data?.detail || error.code || error.message;
+    console.error(`[CRM] ❌ Timeline sync FAILED: ${payload.phone} | ${errorMsg}`);
   }
 }
 
