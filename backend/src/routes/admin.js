@@ -331,14 +331,9 @@ router.post('/send', async (req, res) => {
     console.log(`💾 Message saved to database for ${phone}`);
 
     // ──────────────────────────────────────────────────────────────
-    // AC4: Always return 200 even on Meta failure (CRM treats 2xx as delivered)
+    // Sync back to CRM timeline ALWAYS (fire-and-forget)
+    // Even if Meta fails, CRM needs to know we received + processed the request
     // ──────────────────────────────────────────────────────────────
-    if (sendError) {
-      console.warn(`⚠️  CRM Request processed but Meta failed: ${sendError}`);
-      return res.status(200).json({ success: false, error: sendError });
-    }
-
-    // Sync back to CRM timeline (fire-and-forget)
     if (isCrmTrigger) {
       syncTimeline({
         phone: normalizedPhone,
@@ -347,8 +342,17 @@ router.post('/send', async (req, res) => {
         call_id,
         template
       }).catch(() => {});
-      console.log(`✨ CRM Trigger completed successfully for ${phone}\n`);
+      console.log(`✨ CRM Trigger synced to timeline for ${phone}`);
     }
+
+    // ──────────────────────────────────────────────────────────────
+    // AC4: Always return 200 even on Meta failure (CRM treats 2xx as delivered)
+    // ──────────────────────────────────────────────────────────────
+    if (sendError) {
+      console.warn(`⚠️  CRM Request processed but Meta failed: ${sendError}`);
+      return res.status(200).json({ success: false, error: sendError });
+    }
+
     res.json({ success: true });
   } catch (e) {
     // Unexpected error — log but still return 200 if CRM is involved
