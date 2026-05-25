@@ -10,6 +10,7 @@ const multer   = require('multer');
 const pdfParse = require('pdf-parse');
 const db       = require('../database');
 const { sendText } = require('../whatsapp');
+const { syncTimeline } = require('../crmClient');
 
 const diskStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, os.tmpdir()),
@@ -337,7 +338,15 @@ router.post('/send', async (req, res) => {
       return res.status(200).json({ success: false, error: sendError });
     }
 
+    // Sync back to CRM timeline (fire-and-forget)
     if (isCrmTrigger) {
+      syncTimeline({
+        phone: normalizedPhone,
+        direction: 'outbound',
+        message,
+        call_id,
+        template
+      }).catch(() => {});
       console.log(`✨ CRM Trigger completed successfully for ${phone}\n`);
     }
     res.json({ success: true });
