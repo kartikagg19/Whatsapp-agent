@@ -234,6 +234,7 @@ async function getAIReply(userMessage, history = [], lead = null) {
       `Intent: ${(lead.intent || 'general').replace('_', ' ')}\n` +
       `Total messages exchanged: ${lead.message_count || 0}\n` +
       (known.length ? `Already extracted:\n${known.map(k => `  - ${k}`).join('\n')}\n` : '') +
+      (lead.site_visit_offered ? `Site visit calendar: already sent — set site_visit_offered and site_visit_confirmed to false\n` : '') +
       '[END CALL SESSION — do NOT re-ask any question whose answer is already listed above]\n';
   }
 

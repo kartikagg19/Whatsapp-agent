@@ -16,7 +16,7 @@ const getDB = () => {
 
 // ── LEADS ────────────────────────────────────────────────────────
 
-async function upsertLead({ phone, name, score, label, intent, budget_range, location_preference, timeline, purpose }) {
+async function upsertLead({ phone, name, score, label, intent, budget_range, location_preference, timeline, purpose, site_visit_offered }) {
   const d   = getDB();
   const now = new Date().toISOString();
   const { data: ex } = await d.from('leads').select('id,message_count').eq('phone', phone).single();
@@ -26,6 +26,7 @@ async function upsertLead({ phone, name, score, label, intent, budget_range, loc
   if (location_preference) extras.location_preference = location_preference;
   if (timeline)            extras.timeline            = timeline;
   if (purpose)             extras.purpose             = purpose;
+  if (site_visit_offered)  extras.site_visit_offered  = true;
 
   if (ex) {
     const { data, error } = await d.from('leads')

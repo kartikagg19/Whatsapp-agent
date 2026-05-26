@@ -87,6 +87,7 @@ router.post('/', async (req, res) => {
     console.log(`🤖 Reply (${label} ${ai.lead_score}/10): "${ai.reply_message}"`);
 
     // Step 5: save reply + upsert lead (non-critical — don't block sending)
+    const siteVisitNow = !!(ai.site_visit_offered || ai.site_visit_confirmed);
     db.saveMessage({ phone, role: 'assistant', message: ai.reply_message, score: ai.lead_score, input_tokens: ai.input_tokens, output_tokens: ai.output_tokens })
       .catch(e => console.warn('⚠️ save reply failed:', e.message));
     db.upsertLead({
@@ -94,7 +95,8 @@ router.post('/', async (req, res) => {
       budget_range:        ai.budget_range        || undefined,
       location_preference: ai.location_preference || undefined,
       timeline:            ai.timeline            || undefined,
-      purpose:             ai.purpose             || undefined
+      purpose:             ai.purpose             || undefined,
+      site_visit_offered:  siteVisitNow           || undefined
     }).catch(e => console.warn('⚠️ upsertLead failed:', e.message));
 
     // Step 6: apply reply delay
@@ -109,20 +111,21 @@ router.post('/', async (req, res) => {
         console.log(`📎 Document sent: ${docName}`);
       } catch (e) {
         console.warn('⚠️ Document send failed, sending link as text:', e.message);
-        // Fallback: send the URL as plain text so user can still download
         await sendText(phone, `📎 ${docName}\n\nYahan se download karein:\n${ai.send_document}`).catch(() => {});
       }
     }
 
-    // Step 8: send reply
+    // Step 8: send reply — calendar buttons only sent ONCE per lead
+    const alreadySentCalendar = existingLead?.site_visit_offered === true;
     try {
-      if (ai.site_visit_offered || ai.site_visit_confirmed) {
+      if (siteVisitNow && !alreadySentCalendar) {
         await sendText(phone, ai.reply_message);
         await sendButtons(phone, '📅 Site visit ke liye time choose karein:', [
           { id: 'saturday', title: 'Saturday' },
           { id: 'sunday',   title: 'Sunday'   },
           { id: 'weekday',  title: 'Weekday'  }
         ]);
+        console.log(`📅 Calendar buttons sent to ${phone}`);
       } else {
         await sendText(phone, ai.reply_message);
       }
@@ -130,8 +133,10 @@ router.post('/', async (req, res) => {
       console.error('❌ sendText failed:', e.response?.data || e.message);
     }
 
-    // Step 9: sales alert for HOT leads
-    if (label === 'HOT' && process.env.SALES_PHONE_NUMBER) {
+    // Step 9: HOT lead alert — only fires ONCE when lead first becomes HOT
+    const wasHotBefore = existingLead?.label === 'HOT';
+    if (label === 'HOT' && !wasHotBefore && process.env.SALES_PHONE_NUMBER) {
+      console.log(`🔥 NEW HOT lead — alerting sales: ${phone}`);
       alertSales(process.env.SALES_PHONE_NUMBER, { phone, name, score: ai.lead_score * 10, intent: ai.qualification_stage || 'general' })
         .catch(e => console.warn('⚠️ Sales alert failed:', e.message));
     }
