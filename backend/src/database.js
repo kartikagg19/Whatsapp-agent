@@ -84,8 +84,8 @@ async function getCostStats() {
   if (error) throw error;
   const rows = (data || []).filter(r => r.input_tokens || r.output_tokens);
 
-  const INPUT_PER_TOKEN  = 0.10 / 1_000_000; // USD
-  const OUTPUT_PER_TOKEN = 0.40 / 1_000_000; // USD
+  const INPUT_PER_TOKEN  = 0.15 / 1_000_000; // USD — Gemini 2.5 Flash
+  const OUTPUT_PER_TOKEN = 0.60 / 1_000_000; // USD — Gemini 2.5 Flash
   const USD_TO_INR = 84;
 
   const byPhone = {};
