@@ -194,15 +194,16 @@ async function getKnowledgeText() {
     for (const [group, items] of Object.entries(byGroup)) {
       let block = `## PROJECT: ${group}\n`;
       const jsonDocs = items.filter(d => d.file_type === 'json' && d.content);
-      const textDocs = items.filter(d => d.file_type !== 'json' && d.content);
+      const textDocs = items.filter(d => d.file_type !== 'json' && d.content && !d.file_url);
       const fileDocs = items.filter(d => d.file_url);
 
+      // FILES section goes FIRST so AI always sees it
+      if (fileDocs.length) {
+        block += `SENDABLE FILES FOR "${group}" (IMPORTANT — when user asks for brochure, plan, PDF, document, or any file about this project → pick the closest match below and set send_document to its URL):\n`;
+        block += fileDocs.map(d => `  send_document URL for "${d.name}": ${d.file_url}`).join('\n') + '\n\n';
+      }
       if (jsonDocs.length) block += jsonDocs.map(d => `### ${d.name}\n${d.content}`).join('\n\n') + '\n';
       if (textDocs.length) block += textDocs.map(d => `### ${d.name}\n${d.content}`).join('\n\n') + '\n';
-      if (fileDocs.length) {
-        block += `\nFILES FOR "${group}" — set send_document to the URL when user asks for brochure/plan/PDF:\n`;
-        block += fileDocs.map(d => `- ${d.name}: ${d.file_url}`).join('\n');
-      }
       sections.push(block);
     }
 

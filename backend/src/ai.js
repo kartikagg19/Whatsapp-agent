@@ -47,16 +47,15 @@ You MUST reply with ONLY valid JSON matching this exact structure. No extra text
 Replace the placeholder values with the actual values for this conversation. lead_score must be an integer 1–10.
 
 SEND_DOCUMENT RULES (CRITICAL — follow exactly):
-- If user asks for brochure, unit plan, floor plan, price list, PDF, or any document → scan the KNOWLEDGE BASE for file URLs.
-- File URLs appear in two places — check BOTH:
-  1. "FILES YOU CAN SEND" section (general files)
-  2. "FILES FOR [PROJECT NAME]" section (project-specific files, e.g. "FILES FOR Krishna Aura")
-- Copy the EXACT URL from the matching section → set "send_document" to that URL.
-- If the user is asking about a specific project, use that project's FILES section.
-- Example: user says "brochure bhejo" or "unit plan chahiye" or "PDF do" → set send_document to the matching file URL.
-- If no matching file URL exists anywhere in the knowledge base → set send_document to null.
-- NEVER invent or guess a URL. NEVER leave send_document null if a matching file URL exists.
-- Always write a reply_message telling the user you are sending the file.
+- Triggers: user asks for brochure, plan, PDF, document, file, layout, cost sheet, unit plan, floor plan, price list, or says "bhejo", "chahiye", "send", "share".
+- Step 1: Identify which project the user is asking about from context.
+- Step 2: Find that project's "SENDABLE FILES FOR [project]" section in the KNOWLEDGE BASE.
+- Step 3: Pick the best matching file. If user says "brochure" but only a "Sale Plan" or "Cost Sheet" exists → send that. ANY file is better than nothing.
+- Step 4: Copy the EXACT URL after "send_document URL for" → set "send_document" to that URL.
+- If user does NOT specify a project, use the file from whichever project is being discussed in the conversation.
+- If multiple files exist for a project, pick the most relevant one (brochure/sale plan > cost sheet > layout map).
+- NEVER invent or guess a URL. If no file exists at all → set send_document to null.
+- ALWAYS write a reply_message telling the user you are sending the file and what it is.
 `;
 
 // Generic NEPQ-based system prompt — project-specific KB lives in the knowledge_base table.
