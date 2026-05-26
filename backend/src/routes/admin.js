@@ -428,6 +428,60 @@ router.post('/knowledge/upload', upload.single('file'), async (req, res) => {
   }
 });
 
+// POST /api/knowledge/project — upload multiple files (JSON + PDFs) under one project group
+router.post('/knowledge/project', upload.array('files', 50), async (req, res) => {
+  const { project_group } = req.body;
+  if (!project_group || !project_group.trim())
+    return res.status(400).json({ error: 'project_group (project name) is required' });
+
+  const results = [], errors = [];
+
+  for (const file of (req.files || [])) {
+    const tempPath = file.path;
+    try {
+      const fileBuffer = fs.readFileSync(tempPath);
+      const name      = file.originalname;
+      const isJson    = name.toLowerCase().endsWith('.json') || file.mimetype === 'application/json';
+      const isPdf     = file.mimetype === 'application/pdf'  || name.toLowerCase().endsWith('.pdf');
+
+      let content = '', file_url = null, fileType = 'text';
+
+      if (isJson) {
+        content  = fileBuffer.toString('utf8');
+        fileType = 'json';
+        try { JSON.parse(content); } catch {
+          errors.push({ name, error: 'Invalid JSON — skipped' }); continue;
+        }
+      } else if (isPdf) {
+        const parsed = await pdfParse(fileBuffer);
+        content  = parsed.text;
+        fileType = 'pdf';
+        try {
+          file_url = await db.uploadToStorage(`${project_group}/${name}`, fileBuffer, 'application/pdf');
+        } catch (e) { console.warn('Storage upload failed:', e.message); }
+      } else {
+        content  = fileBuffer.toString('utf8');
+        fileType = 'text';
+      }
+
+      if (!content.trim()) { errors.push({ name, error: 'Empty content — skipped' }); continue; }
+
+      const doc = await db.addKnowledge({
+        name, content: content.trim(), file_type: fileType,
+        size_chars: content.length, file_url, project_group: project_group.trim()
+      });
+      results.push(doc);
+    } catch (e) {
+      errors.push({ name: file.originalname, error: e.message });
+    } finally {
+      try { fs.unlinkSync(tempPath); } catch {}
+    }
+  }
+
+  console.log(`📁 Project "${project_group}": ${results.length} uploaded, ${errors.length} errors`);
+  res.json({ success: true, uploaded: results.length, errors, data: results });
+});
+
 // DELETE /api/knowledge/:id
 router.delete('/knowledge/:id', async (req, res) => {
   try {

@@ -146,9 +146,10 @@ async function getKnowledgeBase() {
   return data || [];
 }
 
-async function addKnowledge({ name, content, file_type, size_chars, file_url }) {
+async function addKnowledge({ name, content, file_type, size_chars, file_url, project_group }) {
   const row = { name, content, file_type, size_chars, created_at: new Date().toISOString() };
-  if (file_url) row.file_url = file_url;
+  if (file_url)      row.file_url      = file_url;
+  if (project_group) row.project_group = project_group;
   const { data, error } = await getDB().from('knowledge_base')
     .insert(row).select().single();
   if (error) throw error;
@@ -164,14 +165,47 @@ async function getKnowledgeText() {
   try {
     const docs = await getKnowledgeBase();
     if (!docs.length) return '';
-    const textDocs = docs.filter(d => d.content);
-    const fileDocs = docs.filter(d => d.file_url);
-    let result = textDocs.map(d => `### ${d.name}\n${d.content}`).join('\n\n---\n\n');
-    if (fileDocs.length) {
-      result += '\n\n---\nFILES YOU CAN SEND (set send_document to the file_url when user asks for brochure/unit plan):\n' +
-        fileDocs.map(d => `- ${d.name}: ${d.file_url}`).join('\n');
+
+    // Split into grouped (by project) and ungrouped
+    const byGroup = {};
+    const ungrouped = [];
+    for (const doc of docs) {
+      if (doc.project_group) {
+        if (!byGroup[doc.project_group]) byGroup[doc.project_group] = [];
+        byGroup[doc.project_group].push(doc);
+      } else {
+        ungrouped.push(doc);
+      }
     }
-    return result;
+
+    const sections = [];
+
+    // Ungrouped text docs (original behavior)
+    const ugText  = ungrouped.filter(d => d.content);
+    const ugFiles = ungrouped.filter(d => d.file_url);
+    if (ugText.length)  sections.push(ugText.map(d => `### ${d.name}\n${d.content}`).join('\n\n---\n\n'));
+    if (ugFiles.length) sections.push(
+      'FILES YOU CAN SEND (set send_document to the file_url when user asks for brochure/unit plan):\n' +
+      ugFiles.map(d => `- ${d.name}: ${d.file_url}`).join('\n')
+    );
+
+    // Grouped projects — each project gets its own section
+    for (const [group, items] of Object.entries(byGroup)) {
+      let block = `## PROJECT: ${group}\n`;
+      const jsonDocs = items.filter(d => d.file_type === 'json' && d.content);
+      const textDocs = items.filter(d => d.file_type !== 'json' && d.content);
+      const fileDocs = items.filter(d => d.file_url);
+
+      if (jsonDocs.length) block += jsonDocs.map(d => `### ${d.name}\n${d.content}`).join('\n\n') + '\n';
+      if (textDocs.length) block += textDocs.map(d => `### ${d.name}\n${d.content}`).join('\n\n') + '\n';
+      if (fileDocs.length) {
+        block += `\nFILES FOR "${group}" — set send_document to the URL when user asks for brochure/plan/PDF:\n`;
+        block += fileDocs.map(d => `- ${d.name}: ${d.file_url}`).join('\n');
+      }
+      sections.push(block);
+    }
+
+    return sections.join('\n\n---\n\n');
   } catch { return ''; }
 }
 

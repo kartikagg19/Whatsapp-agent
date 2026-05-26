@@ -913,12 +913,16 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
 
   // ── KNOWLEDGE BASE TAB ────────────────────────────────────────
   const KnowledgeTab = () => {
-    const [docs,    setDocs]    = useState(null);
-    const [uploading,setUploading]=useState(false);
-    const [text,    setText]    = useState('');
-    const [textName,setTextName]= useState('');
-    const [dragOver,setDragOver]= useState(false);
-    const fileRef = useRef(null);
+    const [docs,       setDocs]      = useState(null);
+    const [uploading,  setUploading] = useState(false);
+    const [text,       setText]      = useState('');
+    const [textName,   setTextName]  = useState('');
+    const [dragOver,   setDragOver]  = useState(false);
+    const [projName,   setProjName]  = useState('');
+    const [projFiles,  setProjFiles] = useState([]);
+    const [projUploading,setProjUploading] = useState(false);
+    const fileRef    = useRef(null);
+    const projRef    = useRef(null);
 
     const loadDocs = useCallback(async () => {
       if(isDemo){setDocs([]);return;}
@@ -940,6 +944,28 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
         else showToast(d.error||'Upload failed','err');
       }catch{showToast('Cannot connect to backend','err');}
       setUploading(false);
+    }
+
+    async function uploadProject(){
+      if(!projName.trim()){showToast('Enter a project name','err');return;}
+      if(!projFiles.length){showToast('Select at least one file','err');return;}
+      if(isDemo){showToast('Connect backend to upload','err');return;}
+      setProjUploading(true);
+      try{
+        const fd=new FormData();
+        fd.append('project_group', projName.trim());
+        projFiles.forEach(f=>fd.append('files',f));
+        const r=await apiFetch(`${apiBase}/knowledge/project`,{method:'POST',body:fd});
+        const d=await r.json();
+        if(d.success){
+          showToast(`${d.uploaded} file(s) uploaded to "${projName}"`, 'success');
+          if(d.errors&&d.errors.length) showToast(`${d.errors.length} file(s) skipped`,'err');
+          setProjName('');setProjFiles([]);
+          if(projRef.current) projRef.current.value='';
+          loadDocs();
+        } else showToast(d.error||'Upload failed','err');
+      }catch{showToast('Cannot connect to backend','err');}
+      setProjUploading(false);
     }
 
     async function uploadText(){
@@ -965,11 +991,51 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
 
     const fmt_size=n=>n>1000?`${(n/1000).toFixed(1)}k chars`:`${n} chars`;
 
+    // Group docs by project_group for display
+    const grouped = {};
+    const ungrouped = [];
+    (docs||[]).forEach(d=>{
+      if(d.project_group){
+        if(!grouped[d.project_group]) grouped[d.project_group]=[];
+        grouped[d.project_group].push(d);
+      } else ungrouped.push(d);
+    });
+
     return h('div',{style:{display:'flex',flexDirection:'column',gap:'14px'}},
-      // Upload file card
+
+      // ── Upload Project (multi-file) card ────────────────────────
       h('div',{className:'card'},
         h('div',{className:'card-hd'},
-          h('span',{className:'card-title'},'Upload Document'),
+          h('span',{className:'card-title'},'Upload Project'),
+          h('span',{style:{fontSize:'12px',color:'var(--text3)'}},'JSON + PDFs grouped under one project')
+        ),
+        h('div',{className:'card-bd',style:{display:'flex',flexDirection:'column',gap:'10px'}},
+          h(Field,{label:'Project Name',hint:'E.g. "Krishna Aura", "Krishna Heights"'},
+            h('input',{value:projName,onChange:e=>setProjName(e.target.value),
+              placeholder:'Enter project name...'})),
+          h(Field,{label:'Project Files',hint:'Select JSON data file + PDF brochures/floor plans together'},
+            h('div',{style:{display:'flex',gap:'8px',alignItems:'center'}},
+              h('button',{className:'btn btn-ghost',onClick:()=>projRef.current?.click()},
+                h('i',{className:'ti ti-folder-open'}),'Select Files'),
+              projFiles.length>0&&h('span',{style:{fontSize:'12px',color:'var(--text2)'}},
+                `${projFiles.length} file(s) selected: ${projFiles.map(f=>f.name).join(', ')}`)
+            ),
+            h('input',{ref:projRef,type:'file',multiple:true,accept:'.json,.pdf,.txt',
+              style:{display:'none'},
+              onChange:e=>setProjFiles(Array.from(e.target.files))})
+          ),
+          h('button',{
+            className:'btn btn-primary',
+            onClick:uploadProject,
+            disabled:projUploading||!projName.trim()||!projFiles.length
+          }, projUploading?h(Spinner):[h('i',{className:'ti ti-folder-up'}),' Upload Project'])
+        )
+      ),
+
+      // ── Upload single file card ─────────────────────────────────
+      h('div',{className:'card'},
+        h('div',{className:'card-hd'},
+          h('span',{className:'card-title'},'Upload Single Document'),
           h('span',{style:{fontSize:'12px',color:'var(--text3)'}},
             'PDF, TXT — Max 15 MB')
         ),
@@ -992,7 +1058,8 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
             onChange:e=>uploadFile(e.target.files[0])})
         )
       ),
-      // Manual text entry card
+
+      // ── Manual text entry card ──────────────────────────────────
       h('div',{className:'card'},
         h('div',{className:'card-hd'},h('span',{className:'card-title'},'Add Text Entry')),
         h('div',{className:'card-bd'},
@@ -1006,28 +1073,56 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
             uploading?h(Spinner):h('i',{className:'ti ti-plus'}),' Save Entry')
         )
       ),
-      // Uploaded docs list
+
+      // ── Uploaded docs list grouped by project ───────────────────
       h('div',{className:'card'},
         h('div',{className:'card-hd'},
-          h('span',{className:'card-title'},'Uploaded Documents'),
+          h('span',{className:'card-title'},'Knowledge Base'),
           h('button',{className:'btn btn-ghost btn-sm',onClick:loadDocs},h('i',{className:'ti ti-refresh'}),'Refresh')
         ),
         docs===null?h('div',{className:'empty'},h(Spinner)):
         docs.length===0
           ?h('div',{className:'empty'},
             h('i',{className:'ti ti-file-off'}),
-            h('p',null,'No documents yet — upload a PDF or add a text entry above'))
-          :h('div',{className:'tbl-wrap'},
-            h('table',null,
-              h('thead',null,h('tr',null,['Name','Type','Size','Uploaded',''].map(c=>h('th',{key:c},c)))),
-              h('tbody',null,docs.map(d=>h('tr',{key:d.id},
-                h('td',{className:'td-name'},d.name),
-                h('td',null,h('span',{className:'badge b-tag'},d.file_type||'text')),
-                h('td',{style:{fontFamily:'var(--mono)',color:'var(--text3)'}},fmt_size(d.size_chars||0)),
-                h('td',{style:{color:'var(--text3)'}},fmt(d.created_at)),
-                h('td',null,h('button',{className:'btn btn-danger btn-sm',onClick:()=>deleteDOC(d.id,d.name)},
-                  h('i',{className:'ti ti-trash'})))
-              )))
+            h('p',null,'No documents yet — upload a project or single file above'))
+          :h('div',null,
+            // Project groups
+            Object.entries(grouped).map(([grp,items])=>
+              h('div',{key:grp,style:{borderBottom:'1px solid var(--border)'}},
+                h('div',{style:{padding:'8px 16px',background:'var(--surface2)',display:'flex',alignItems:'center',gap:'6px'}},
+                  h('i',{className:'ti ti-folder',style:{color:'var(--warm)',fontSize:'13px'}}),
+                  h('span',{style:{fontSize:'11px',fontWeight:700,color:'var(--text2)',textTransform:'uppercase',letterSpacing:'0.06em'}},grp),
+                  h('span',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)'}},`${items.length} file(s)`)
+                ),
+                h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:'13px'}},
+                  h('tbody',null,items.map(d=>h('tr',{key:d.id,style:{borderBottom:'1px solid var(--border)'}},
+                    h('td',{style:{padding:'8px 16px',paddingLeft:'32px'}},d.name),
+                    h('td',{style:{padding:'8px 16px'}},h('span',{className:'badge b-tag'},d.file_type||'text')),
+                    h('td',{style:{padding:'8px 16px',fontFamily:'var(--mono)',color:'var(--text3)',fontSize:'11px'}},fmt_size(d.size_chars||0)),
+                    h('td',{style:{padding:'8px 16px',color:'var(--text3)',fontSize:'11px'}},fmt(d.created_at)),
+                    h('td',{style:{padding:'8px 16px'}},h('button',{className:'btn btn-danger btn-sm',onClick:()=>deleteDOC(d.id,d.name)},
+                      h('i',{className:'ti ti-trash'})))
+                  )))
+                )
+              )
+            ),
+            // Ungrouped docs
+            ungrouped.length>0&&h('div',null,
+              Object.keys(grouped).length>0&&h('div',{style:{padding:'8px 16px',background:'var(--surface2)',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',gap:'6px'}},
+                h('i',{className:'ti ti-file',style:{fontSize:'13px',color:'var(--text3)'}}),
+                h('span',{style:{fontSize:'11px',fontWeight:700,color:'var(--text2)',textTransform:'uppercase',letterSpacing:'0.06em'}},'General')
+              ),
+              h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:'13px'}},
+                h('thead',null,h('tr',null,['Name','Type','Size','Uploaded',''].map(c=>h('th',{key:c,style:{padding:'8px 16px',textAlign:'left',borderBottom:'1px solid var(--border)',color:'var(--text3)',fontSize:'11px',fontWeight:600}},c)))),
+                h('tbody',null,ungrouped.map(d=>h('tr',{key:d.id,style:{borderBottom:'1px solid var(--border)'}},
+                  h('td',{style:{padding:'8px 16px'}},d.name),
+                  h('td',{style:{padding:'8px 16px'}},h('span',{className:'badge b-tag'},d.file_type||'text')),
+                  h('td',{style:{padding:'8px 16px',fontFamily:'var(--mono)',color:'var(--text3)',fontSize:'11px'}},fmt_size(d.size_chars||0)),
+                  h('td',{style:{padding:'8px 16px',color:'var(--text3)',fontSize:'11px'}},fmt(d.created_at)),
+                  h('td',{style:{padding:'8px 16px'}},h('button',{className:'btn btn-danger btn-sm',onClick:()=>deleteDOC(d.id,d.name)},
+                    h('i',{className:'ti ti-trash'})))
+                )))
+              )
             )
           )
       ),
