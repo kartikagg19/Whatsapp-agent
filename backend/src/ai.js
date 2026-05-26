@@ -47,10 +47,15 @@ You MUST reply with ONLY valid JSON matching this exact structure. No extra text
 Replace the placeholder values with the actual values for this conversation. lead_score must be an integer 1–10.
 
 SEND_DOCUMENT RULES (CRITICAL — follow exactly):
-- If user asks for brochure, unit plan, floor plan, price list, PDF, or any document → look in the KNOWLEDGE BASE for "FILES YOU CAN SEND" section → copy the EXACT URL → set "send_document" to that URL.
+- If user asks for brochure, unit plan, floor plan, price list, PDF, or any document → scan the KNOWLEDGE BASE for file URLs.
+- File URLs appear in two places — check BOTH:
+  1. "FILES YOU CAN SEND" section (general files)
+  2. "FILES FOR [PROJECT NAME]" section (project-specific files, e.g. "FILES FOR Krishna Aura")
+- Copy the EXACT URL from the matching section → set "send_document" to that URL.
+- If the user is asking about a specific project, use that project's FILES section.
 - Example: user says "brochure bhejo" or "unit plan chahiye" or "PDF do" → set send_document to the matching file URL.
-- If the FILES YOU CAN SEND section is missing or has no matching file → set send_document to null.
-- NEVER invent or guess a URL. NEVER leave it null if a matching file exists.
+- If no matching file URL exists anywhere in the knowledge base → set send_document to null.
+- NEVER invent or guess a URL. NEVER leave send_document null if a matching file URL exists.
 - Always write a reply_message telling the user you are sending the file.
 `;
 
