@@ -47,11 +47,15 @@ You MUST reply with ONLY valid JSON matching this exact structure. No extra text
 Replace the placeholder values with the actual values for this conversation. lead_score must be an integer 1–10.
 
 SEND_DOCUMENT RULES (CRITICAL — follow exactly):
-- If user asks for brochure, unit plan, floor plan, price list, PDF, or any document → look in the KNOWLEDGE BASE for "FILES YOU CAN SEND" section → copy the EXACT URL → set "send_document" to that URL.
-- Example: user says "brochure bhejo" or "unit plan chahiye" or "PDF do" → set send_document to the matching file URL.
-- If the FILES YOU CAN SEND section is missing or has no matching file → set send_document to null.
-- NEVER invent or guess a URL. NEVER leave it null if a matching file exists.
-- Always write a reply_message telling the user you are sending the file.
+- Triggers: user asks for brochure, plan, PDF, document, file, layout, cost sheet, unit plan, floor plan, price list, or says "bhejo", "chahiye", "send", "share".
+- Step 1: Identify which project the user is asking about from context.
+- Step 2: Find that project's "SENDABLE FILES FOR [project]" section in the KNOWLEDGE BASE.
+- Step 3: Pick the best matching file. If user says "brochure" but only a "Sale Plan" or "Cost Sheet" exists → send that. ANY file is better than nothing.
+- Step 4: Copy the EXACT URL after "send_document URL for" → set "send_document" to that URL.
+- If user does NOT specify a project, use the file from whichever project is being discussed in the conversation.
+- If multiple files exist for a project, pick the most relevant one (brochure/sale plan > cost sheet > layout map).
+- NEVER invent or guess a URL. If no file exists at all → set send_document to null.
+- ALWAYS write a reply_message telling the user you are sending the file and what it is.
 `;
 
 // Generic NEPQ-based system prompt — project-specific KB lives in the knowledge_base table.
@@ -229,6 +233,7 @@ async function getAIReply(userMessage, history = [], lead = null) {
       `Intent: ${(lead.intent || 'general').replace('_', ' ')}\n` +
       `Total messages exchanged: ${lead.message_count || 0}\n` +
       (known.length ? `Already extracted:\n${known.map(k => `  - ${k}`).join('\n')}\n` : '') +
+      (lead.site_visit_offered ? `Site visit calendar: already sent — set site_visit_offered and site_visit_confirmed to false\n` : '') +
       '[END CALL SESSION — do NOT re-ask any question whose answer is already listed above]\n';
   }
 

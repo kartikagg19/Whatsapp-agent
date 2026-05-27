@@ -232,6 +232,41 @@ router.get('/leads/:phone', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ────────────────────────────────────────────────────────────────
+// Template sender helper
+// ────────────────────────────────────────────────────────────────
+async function sendTemplate(phone, templateName, params, language) {
+  const axios = require('axios');
+  const token = process.env.WHATSAPP_TOKEN;
+  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+
+  if (!token || !phoneId) throw new Error('WHATSAPP_TOKEN or WHATSAPP_PHONE_NUMBER_ID not configured');
+
+  // Build template parameters
+  const components = params && params.length > 0 ? [{
+    type: 'body',
+    parameters: params.map(p => ({ type: 'text', text: String(p) }))
+  }] : [];
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: phone,
+    type: 'template',
+    template: {
+      name: templateName,
+      language: { code: language || 'en' },
+      ...(components.length > 0 && { components })
+    }
+  };
+
+  const url = `https://graph.instagram.com/v20.0/${phoneId}/messages`;
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+
+  const resp = await axios.post(url, payload, { headers });
+  return resp.data;
+}
+
 // POST /api/send — trigger a WhatsApp message (CRM or dashboard)
 // ────────────────────────────────────────────────────────────────
 // CRM FLOW (PropelloCRM integration):
@@ -255,11 +290,12 @@ router.get('/leads/:phone', async (req, res) => {
 
 router.post('/send', async (req, res) => {
   try {
-    const { phone, message, call_id, template } = req.body;
+    const { phone, message, call_id, template, template_name, template_params, template_language } = req.body;
     const headerSecret = req.headers['x-webhook-secret'];
     const crmSecret = process.env.CRM_WEBHOOK_SECRET || '';
     const isCrmTrigger = !!headerSecret;
     const timestamp = new Date().toISOString();
+    const isTemplateMode = !!template_name;
 
     // Log incoming request
     if (isCrmTrigger) {
@@ -268,7 +304,12 @@ router.post('/send', async (req, res) => {
       console.log(`   ║ Time: ${timestamp}`);
       console.log(`   ║ Phone: ${phone}`);
       console.log(`   ║ Call ID: ${call_id || 'none'}`);
-      console.log(`   ║ Template: ${template || 'none'}`);
+      if (isTemplateMode) {
+        console.log(`   ║ Template: ${template_name}`);
+        console.log(`   ║ Params: ${(template_params || []).join(', ')}`);
+      } else {
+        console.log(`   ║ Message: ${message?.substring(0, 50)}...`);
+      }
       console.log(`   ╚═══════════════════════════════════════════\n`);
     }
 
@@ -280,13 +321,10 @@ router.post('/send', async (req, res) => {
       return res.status(403).json({ error: 'Invalid X-Webhook-Secret' });
     }
 
-    // For backward compatibility during transition: if headerSecret is provided,
-    // we know it's CRM. If not, assume it's dashboard (legacy). Once all clients
-    // send the header, we can enforce it for all calls.
-
-    if (!phone || !message) {
-      console.warn(`⚠️  Missing required fields: phone=${phone}, message=${message}`);
-      return res.status(400).json({ error: 'phone and message required' });
+    // Validate: must have phone + (message OR template_name)
+    if (!phone || (!message && !template_name)) {
+      console.warn(`⚠️  Missing required fields: phone=${phone}, message=${message}, template_name=${template_name}`);
+      return res.status(400).json({ error: 'phone and (message or template_name) required' });
     }
 
     // Normalize phone: strip spaces, dashes, +; add 91 if 10-digit India number
@@ -304,31 +342,43 @@ router.post('/send', async (req, res) => {
     }
 
     // ──────────────────────────────────────────────────────────────
-    // Send to Meta and save locally
+    // Send to Meta (either template or free-form message) and save locally
     // ──────────────────────────────────────────────────────────────
     let sendError = null;
     let metaSuccess = false;
+    let sentVia = isTemplateMode ? 'template' : 'message';
+
     try {
-      await sendText(normalizedPhone, message);
-      metaSuccess = true;
-      console.log(`✅ Message sent to ${normalizedPhone} via Meta WhatsApp`);
+      if (isTemplateMode) {
+        await sendTemplate(normalizedPhone, template_name, template_params, template_language);
+        metaSuccess = true;
+        console.log(`✅ Template '${template_name}' sent to ${normalizedPhone} via Meta WhatsApp`);
+      } else {
+        await sendText(normalizedPhone, message);
+        metaSuccess = true;
+        console.log(`✅ Message sent to ${normalizedPhone} via Meta WhatsApp`);
+      }
     } catch (err) {
-      // Extract the real Meta error message for the dashboard
+      // Extract the real Meta error message
       const metaErr = err.response?.data?.error;
       sendError = metaErr
         ? `Meta error ${metaErr.code}: ${metaErr.message}`
         : (err.message || 'Meta API error');
-      console.error(`❌ SEND FAILED to ${normalizedPhone}:`, sendError);
+      console.error(`❌ SEND FAILED (${sentVia}) to ${normalizedPhone}:`, sendError);
     }
 
     // Save locally only if actually sent — avoid showing failed messages as sent
     if (metaSuccess) {
       const msgPrefix = call_id ? `[CRM ${call_id}]` : '[MANUAL]';
-      const msgWithTemplate = template ? `${msgPrefix} [${template}] ${message}` : `${msgPrefix} ${message}`;
-      await db.saveMessage({ phone: normalizedPhone, role: 'assistant', message: msgWithTemplate });
-      console.log(`💾 Message saved to database for ${normalizedPhone}`);
+      let displayMsg;
+      if (isTemplateMode) {
+        displayMsg = `${msgPrefix} [TEMPLATE: ${template_name}] ${(template_params || []).join(', ')}`;
+      } else {
+        displayMsg = template ? `${msgPrefix} [${template}] ${message}` : `${msgPrefix} ${message}`;
+      }
+      await db.saveMessage({ phone: normalizedPhone, role: 'assistant', message: displayMsg });
+      console.log(`💾 ${sentVia[0].toUpperCase()}${sentVia.slice(1)} saved to database for ${normalizedPhone}`);
     }
-    console.log(`💾 Message saved to database for ${phone}`);
 
     // ──────────────────────────────────────────────────────────────
     // Sync back to CRM timeline ALWAYS (fire-and-forget)
@@ -439,6 +489,60 @@ router.post('/knowledge/upload', upload.single('file'), async (req, res) => {
   } finally {
     if (tempPath) try { fs.unlinkSync(tempPath); } catch {}
   }
+});
+
+// POST /api/knowledge/project — upload multiple files (JSON + PDFs) under one project group
+router.post('/knowledge/project', upload.array('files', 50), async (req, res) => {
+  const { project_group } = req.body;
+  if (!project_group || !project_group.trim())
+    return res.status(400).json({ error: 'project_group (project name) is required' });
+
+  const results = [], errors = [];
+
+  for (const file of (req.files || [])) {
+    const tempPath = file.path;
+    try {
+      const fileBuffer = fs.readFileSync(tempPath);
+      const name      = file.originalname;
+      const isJson    = name.toLowerCase().endsWith('.json') || file.mimetype === 'application/json';
+      const isPdf     = file.mimetype === 'application/pdf'  || name.toLowerCase().endsWith('.pdf');
+
+      let content = '', file_url = null, fileType = 'text';
+
+      if (isJson) {
+        content  = fileBuffer.toString('utf8');
+        fileType = 'json';
+        try { JSON.parse(content); } catch {
+          errors.push({ name, error: 'Invalid JSON — skipped' }); continue;
+        }
+      } else if (isPdf) {
+        const parsed = await pdfParse(fileBuffer);
+        content  = parsed.text;
+        fileType = 'pdf';
+        try {
+          file_url = await db.uploadToStorage(`${project_group}/${name}`, fileBuffer, 'application/pdf');
+        } catch (e) { console.warn('Storage upload failed:', e.message); }
+      } else {
+        content  = fileBuffer.toString('utf8');
+        fileType = 'text';
+      }
+
+      if (!content.trim()) { errors.push({ name, error: 'Empty content — skipped' }); continue; }
+
+      const doc = await db.addKnowledge({
+        name, content: content.trim(), file_type: fileType,
+        size_chars: content.length, file_url, project_group: project_group.trim()
+      });
+      results.push(doc);
+    } catch (e) {
+      errors.push({ name: file.originalname, error: e.message });
+    } finally {
+      try { fs.unlinkSync(tempPath); } catch {}
+    }
+  }
+
+  console.log(`📁 Project "${project_group}": ${results.length} uploaded, ${errors.length} errors`);
+  res.json({ success: true, uploaded: results.length, errors, data: results });
 });
 
 // DELETE /api/knowledge/:id

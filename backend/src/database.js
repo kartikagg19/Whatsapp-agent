@@ -16,7 +16,7 @@ const getDB = () => {
 
 // ── LEADS ────────────────────────────────────────────────────────
 
-async function upsertLead({ phone, name, score, label, intent, budget_range, location_preference, timeline, purpose }) {
+async function upsertLead({ phone, name, score, label, intent, budget_range, location_preference, timeline, purpose, site_visit_offered }) {
   const d   = getDB();
   const now = new Date().toISOString();
   const { data: ex } = await d.from('leads').select('id,message_count').eq('phone', phone).single();
@@ -26,6 +26,7 @@ async function upsertLead({ phone, name, score, label, intent, budget_range, loc
   if (location_preference) extras.location_preference = location_preference;
   if (timeline)            extras.timeline            = timeline;
   if (purpose)             extras.purpose             = purpose;
+  if (site_visit_offered)  extras.site_visit_offered  = true;
 
   if (ex) {
     const { data, error } = await d.from('leads')
@@ -84,8 +85,8 @@ async function getCostStats() {
   if (error) throw error;
   const rows = (data || []).filter(r => r.input_tokens || r.output_tokens);
 
-  const INPUT_PER_TOKEN  = 0.10 / 1_000_000; // USD
-  const OUTPUT_PER_TOKEN = 0.40 / 1_000_000; // USD
+  const INPUT_PER_TOKEN  = 0.15 / 1_000_000; // USD — Gemini 2.5 Flash
+  const OUTPUT_PER_TOKEN = 0.60 / 1_000_000; // USD — Gemini 2.5 Flash
   const USD_TO_INR = 84;
 
   const byPhone = {};
@@ -146,9 +147,10 @@ async function getKnowledgeBase() {
   return data || [];
 }
 
-async function addKnowledge({ name, content, file_type, size_chars, file_url }) {
+async function addKnowledge({ name, content, file_type, size_chars, file_url, project_group }) {
   const row = { name, content, file_type, size_chars, created_at: new Date().toISOString() };
-  if (file_url) row.file_url = file_url;
+  if (file_url)      row.file_url      = file_url;
+  if (project_group) row.project_group = project_group;
   const { data, error } = await getDB().from('knowledge_base')
     .insert(row).select().single();
   if (error) throw error;
@@ -164,14 +166,48 @@ async function getKnowledgeText() {
   try {
     const docs = await getKnowledgeBase();
     if (!docs.length) return '';
-    const textDocs = docs.filter(d => d.content);
-    const fileDocs = docs.filter(d => d.file_url);
-    let result = textDocs.map(d => `### ${d.name}\n${d.content}`).join('\n\n---\n\n');
-    if (fileDocs.length) {
-      result += '\n\n---\nFILES YOU CAN SEND (set send_document to the file_url when user asks for brochure/unit plan):\n' +
-        fileDocs.map(d => `- ${d.name}: ${d.file_url}`).join('\n');
+
+    // Split into grouped (by project) and ungrouped
+    const byGroup = {};
+    const ungrouped = [];
+    for (const doc of docs) {
+      if (doc.project_group) {
+        if (!byGroup[doc.project_group]) byGroup[doc.project_group] = [];
+        byGroup[doc.project_group].push(doc);
+      } else {
+        ungrouped.push(doc);
+      }
     }
-    return result;
+
+    const sections = [];
+
+    // Ungrouped text docs (original behavior)
+    const ugText  = ungrouped.filter(d => d.content);
+    const ugFiles = ungrouped.filter(d => d.file_url);
+    if (ugText.length)  sections.push(ugText.map(d => `### ${d.name}\n${d.content}`).join('\n\n---\n\n'));
+    if (ugFiles.length) sections.push(
+      'FILES YOU CAN SEND (set send_document to the file_url when user asks for brochure/unit plan):\n' +
+      ugFiles.map(d => `- ${d.name}: ${d.file_url}`).join('\n')
+    );
+
+    // Grouped projects — each project gets its own section
+    for (const [group, items] of Object.entries(byGroup)) {
+      let block = `## PROJECT: ${group}\n`;
+      const jsonDocs = items.filter(d => d.file_type === 'json' && d.content);
+      const textDocs = items.filter(d => d.file_type !== 'json' && d.content && !d.file_url);
+      const fileDocs = items.filter(d => d.file_url);
+
+      // FILES section goes FIRST so AI always sees it
+      if (fileDocs.length) {
+        block += `SENDABLE FILES FOR "${group}" (IMPORTANT — when user asks for brochure, plan, PDF, document, or any file about this project → pick the closest match below and set send_document to its URL):\n`;
+        block += fileDocs.map(d => `  send_document URL for "${d.name}": ${d.file_url}`).join('\n') + '\n\n';
+      }
+      if (jsonDocs.length) block += jsonDocs.map(d => `### ${d.name}\n${d.content}`).join('\n\n') + '\n';
+      if (textDocs.length) block += textDocs.map(d => `### ${d.name}\n${d.content}`).join('\n\n') + '\n';
+      sections.push(block);
+    }
+
+    return sections.join('\n\n---\n\n');
   } catch { return ''; }
 }
 
