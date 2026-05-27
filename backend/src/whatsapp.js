@@ -89,4 +89,36 @@ async function sendDocument(to, fileUrl, filename, caption) {
   }
 }
 
-module.exports = { sendText, sendDocument, sendButtons, markRead, alertSales, parseMessage };
+// ── TEMPLATE MESSAGE (for first-contact / new numbers) ──────────
+// Use this when user has NEVER messaged you — free text won't deliver.
+// templateName: approved template name (e.g. "dreamhome_intro")
+// languageCode: "en" or "en_US" or "hi"
+// params: array of strings for {{1}}, {{2}} etc. in the template body
+async function sendTemplate(to, templateName, languageCode = 'en', params = []) {
+  const components = [];
+  if (params.length > 0) {
+    components.push({
+      type: 'body',
+      parameters: params.map(p => ({ type: 'text', text: String(p) }))
+    });
+  }
+  try {
+    const res = await axios.post(`${API}/${PHONE()}/messages`, {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'template',
+      template: {
+        name: templateName,
+        language: { code: languageCode },
+        ...(components.length ? { components } : {})
+      }
+    }, { headers: HEADER() });
+    console.log(`📨 Template "${templateName}" sent to ${to}`);
+    return res.data;
+  } catch (err) {
+    console.error(`❌ Template send failed to ${to}:`, err.response?.data || err.message);
+    throw err;
+  }
+}
+
+module.exports = { sendText, sendDocument, sendButtons, markRead, alertSales, parseMessage, sendTemplate };

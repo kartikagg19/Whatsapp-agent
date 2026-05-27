@@ -9,7 +9,7 @@ const path     = require('path');
 const multer   = require('multer');
 const pdfParse = require('pdf-parse');
 const db       = require('../database');
-const { sendText } = require('../whatsapp');
+const { sendText, sendTemplate } = require('../whatsapp');
 
 const diskStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, os.tmpdir()),
@@ -233,116 +233,123 @@ router.get('/leads/:phone', async (req, res) => {
 
 // POST /api/send — trigger a WhatsApp message (CRM or dashboard)
 // ────────────────────────────────────────────────────────────────
-// CRM FLOW (PropelloCRM integration):
-//   Header: X-Webhook-Secret = CRM_WEBHOOK_SECRET
+// CRM FLOW:
+//   Header: X-Webhook-Secret = CRM_WEBHOOK_SECRET  (optional but recommended)
 //   Body: {
 //     phone: "91xxxxxxxxxx",
-//     message: "Hello...",
-//     call_id: "unique-id-for-idempotency",     (optional, CRM uses for dedupe)
-//     template: "campaign_name"                 (optional, for analytics)
+//     message: "Hello...",          ← used for free-form (existing contacts)
+//     call_id: "unique-id",         ← optional, prevents duplicate sends
+//     template_name: "dreamhome_intro",  ← NEW: use this for NEW numbers (first contact)
+//     template_params: ["Rahul"],        ← NEW: values for {{1}}, {{2}} etc.
+//     template_language: "en",           ← NEW: optional, defaults to "en"
 //   }
 //
-// DASHBOARD FLOW (legacy):
-//   No auth header (dashboard will be updated to send one, or see §7 risk)
-//   Body: { phone: "91xxxxxxxxxx", message: "Hello..." }
-//
-// Behavior:
-//   - Reject if X-Webhook-Secret provided but doesn't match CRM_WEBHOOK_SECRET
-//   - If call_id seen in last 24h, return 200 { success: true, deduped: true }
-//   - On Meta failure, return 200 { success: false, error: "..." }
+// HOW TO CHOOSE:
+//   - New number (never messaged you) → send template_name + template_params
+//   - Existing contact (messaged within 24h) → send message (free-form)
+//   - Both provided → template takes priority for safety
 // ────────────────────────────────────────────────────────────────
 
 router.post('/send', async (req, res) => {
   try {
-    const { phone, message, call_id, template } = req.body;
+    const { phone, message, call_id, template,
+            template_name, template_params, template_language } = req.body;
     const headerSecret = req.headers['x-webhook-secret'];
     const crmSecret = process.env.CRM_WEBHOOK_SECRET || '';
     const isCrmTrigger = !!headerSecret;
     const timestamp = new Date().toISOString();
+    const useTemplate = !!(template_name && template_name.trim());
 
     // Log incoming request
-    if (isCrmTrigger) {
-      console.log(`\n📨 ╔═══════════════════════════════════════════`);
-      console.log(`   ║ CRM TRIGGER RECEIVED`);
-      console.log(`   ║ Time: ${timestamp}`);
-      console.log(`   ║ Phone: ${phone}`);
-      console.log(`   ║ Call ID: ${call_id || 'none'}`);
-      console.log(`   ║ Template: ${template || 'none'}`);
-      console.log(`   ╚═══════════════════════════════════════════\n`);
-    }
+    console.log(`\n📨 ╔═══════════════════════════════════════════`);
+    console.log(`   ║ ${isCrmTrigger ? 'CRM' : 'DASHBOARD'} TRIGGER`);
+    console.log(`   ║ Time: ${timestamp}`);
+    console.log(`   ║ Phone: ${phone}`);
+    console.log(`   ║ Call ID: ${call_id || 'none'}`);
+    console.log(`   ║ Mode: ${useTemplate ? `TEMPLATE (${template_name})` : 'FREE-FORM'}`);
+    console.log(`   ╚═══════════════════════════════════════════\n`);
 
-    // ──────────────────────────────────────────────────────────────
-    // AC1: Validate secret if provided (CRM flow) or if CRM is enabled
-    // ──────────────────────────────────────────────────────────────
+    // Validate auth
     if (headerSecret && headerSecret !== crmSecret) {
       console.error(`❌ CRM Auth Failed: Invalid X-Webhook-Secret for phone ${phone}`);
       return res.status(403).json({ error: 'Invalid X-Webhook-Secret' });
     }
 
-    // For backward compatibility during transition: if headerSecret is provided,
-    // we know it's CRM. If not, assume it's dashboard (legacy). Once all clients
-    // send the header, we can enforce it for all calls.
-
-    if (!phone || !message) {
-      console.warn(`⚠️  Missing required fields: phone=${phone}, message=${message}`);
-      return res.status(400).json({ error: 'phone and message required' });
+    if (!phone) {
+      return res.status(400).json({ error: 'phone is required' });
+    }
+    if (!useTemplate && !message) {
+      return res.status(400).json({ error: 'Either message (free-form) or template_name (new contact) is required' });
     }
 
-    // Normalize phone: strip spaces, dashes, +; add 91 if 10-digit India number
+    // Normalize phone
     const cleanPhone = phone.replace(/[\s\-\+]/g, '');
     const normalizedPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
     if (normalizedPhone !== phone) console.log(`📞 Phone normalized: ${phone} → ${normalizedPhone}`);
 
-    // ──────────────────────────────────────────────────────────────
-    // AC2 & AC3: Check dedupe (if call_id provided, honor 24h window)
-    // ──────────────────────────────────────────────────────────────
+    // Dedupe check
     const isDuplicate = checkAndRecordCallId(call_id);
     if (isDuplicate) {
       console.log(`⏭️  DEDUPE: call_id=${call_id} already sent within 24h → skipping`);
       return res.status(200).json({ success: true, deduped: true });
     }
 
-    // ──────────────────────────────────────────────────────────────
-    // Send to Meta and save locally
-    // ──────────────────────────────────────────────────────────────
+    // ── SEND ──────────────────────────────────────────────────────
     let sendError = null;
     let metaSuccess = false;
-    try {
-      await sendText(normalizedPhone, message);
-      metaSuccess = true;
-      console.log(`✅ Message sent to ${normalizedPhone} via Meta WhatsApp`);
-    } catch (err) {
-      // Extract the real Meta error message for the dashboard
-      const metaErr = err.response?.data?.error;
-      sendError = metaErr
-        ? `Meta error ${metaErr.code}: ${metaErr.message}`
-        : (err.message || 'Meta API error');
-      console.error(`❌ SEND FAILED to ${normalizedPhone}:`, sendError);
+    let sentContent = '';
+
+    if (useTemplate) {
+      // Template message — works for NEW numbers (first contact)
+      const params  = Array.isArray(template_params) ? template_params : (template_params ? [template_params] : []);
+      const lang    = template_language || 'en';
+      try {
+        await sendTemplate(normalizedPhone, template_name.trim(), lang, params);
+        metaSuccess = true;
+        sentContent = `[TEMPLATE:${template_name}] ${params.join(', ')}`;
+        console.log(`✅ Template "${template_name}" sent to ${normalizedPhone}`);
+      } catch (err) {
+        const metaErr = err.response?.data?.error;
+        sendError = metaErr
+          ? `Meta error ${metaErr.code}: ${metaErr.message}`
+          : (err.message || 'Meta API error');
+        console.error(`❌ TEMPLATE SEND FAILED to ${normalizedPhone}:`, sendError);
+      }
+    } else {
+      // Free-form message — only works if user messaged within last 24h
+      try {
+        await sendText(normalizedPhone, message);
+        metaSuccess = true;
+        const msgPrefix = call_id ? `[CRM ${call_id}]` : '[MANUAL]';
+        sentContent = template ? `${msgPrefix} [${template}] ${message}` : `${msgPrefix} ${message}`;
+        console.log(`✅ Message sent to ${normalizedPhone} via Meta WhatsApp`);
+      } catch (err) {
+        const metaErr = err.response?.data?.error;
+        sendError = metaErr
+          ? `Meta error ${metaErr.code}: ${metaErr.message}`
+          : (err.message || 'Meta API error');
+        console.error(`❌ SEND FAILED to ${normalizedPhone}:`, sendError);
+        // Hint if it looks like a 24h window error
+        if (sendError.includes('131047') || sendError.includes('outside')) {
+          console.warn(`💡 HINT: This number may not have messaged in 24h. Use template_name instead of message.`);
+          sendError += ' — Use template_name for first-contact (new numbers).';
+        }
+      }
     }
 
-    // Save locally only if actually sent — avoid showing failed messages as sent
     if (metaSuccess) {
-      const msgPrefix = call_id ? `[CRM ${call_id}]` : '[MANUAL]';
-      const msgWithTemplate = template ? `${msgPrefix} [${template}] ${message}` : `${msgPrefix} ${message}`;
-      await db.saveMessage({ phone: normalizedPhone, role: 'assistant', message: msgWithTemplate });
-      console.log(`💾 Message saved to database for ${normalizedPhone}`);
+      await db.saveMessage({ phone: normalizedPhone, role: 'assistant', message: sentContent });
+      // Create/update lead record so this contact appears in dashboard
+      await db.upsertLead({ phone: normalizedPhone, name: (template_params?.[0]) || 'Unknown', score: 3, label: 'COLD', intent: 'general' }).catch(()=>{});
     }
-    console.log(`💾 Message saved to database for ${phone}`);
 
-    // ──────────────────────────────────────────────────────────────
-    // AC4: Always return 200 even on Meta failure (CRM treats 2xx as delivered)
-    // ──────────────────────────────────────────────────────────────
     if (sendError) {
-      console.warn(`⚠️  CRM Request processed but Meta failed: ${sendError}`);
       return res.status(200).json({ success: false, error: sendError });
     }
 
-    if (isCrmTrigger) {
-      console.log(`✨ CRM Trigger completed successfully for ${phone}\n`);
-    }
+    if (isCrmTrigger) console.log(`✨ CRM Trigger completed successfully for ${phone}\n`);
     res.json({ success: true });
   } catch (e) {
-    // Unexpected error — log but still return 200 if CRM is involved
     console.error('💥 SEND Unexpected error:', e.message);
     res.status(200).json({ success: false, error: e.message });
   }
@@ -366,6 +373,55 @@ router.post('/broadcast', async (req, res) => {
     }
     res.json({ success: true, total: leads.length, sent, failed });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/broadcast-template — send approved template to NEW numbers (first contact)
+// Body: { phones: ["919876543210",...], template_name: "dreamhome_intro", language: "en", params: ["Rahul"] }
+// OR:   { phones: [...], template_name: "...", language: "en", params_map: {"919876543210": ["Rahul"], ...} }
+router.post('/broadcast-template', async (req, res) => {
+  try {
+    const { phones, template_name, language = 'en', params = [], params_map = {} } = req.body;
+    if (!phones || !Array.isArray(phones) || phones.length === 0)
+      return res.status(400).json({ error: 'phones array required' });
+    if (!template_name)
+      return res.status(400).json({ error: 'template_name required' });
+
+    let sent = 0, failed = 0, errors = [];
+    for (const rawPhone of phones) {
+      const phone = String(rawPhone).replace(/\D/g, '');
+      if (!phone) { failed++; continue; }
+      // Per-number params override global params
+      const p = params_map[phone] || params_map[rawPhone] || params;
+      try {
+        await sendTemplate(phone, template_name, language, p);
+        await db.saveMessage({ phone, role: 'assistant', message: `[TEMPLATE:${template_name}] ${p.join(', ')}` });
+        await db.upsertLead({ phone, name: p[0] || 'Unknown', score: 3, label: 'COLD', intent: 'general' });
+        sent++;
+        await new Promise(r => setTimeout(r, 350)); // stay under rate limit
+      } catch (e) {
+        failed++;
+        errors.push({ phone, error: e.response?.data?.error?.message || e.message });
+      }
+    }
+    res.json({ success: true, total: phones.length, sent, failed, errors: errors.slice(0, 20) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/templates — list approved WhatsApp templates from Meta
+router.get('/templates', async (req, res) => {
+  try {
+    const axios = require('axios');
+    const wabaId = process.env.WABA_ID || '';
+    if (!wabaId) return res.json({ success: true, data: [] });
+    const r = await axios.get(`https://graph.facebook.com/v20.0/${wabaId}/message_templates`, {
+      headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` },
+      params: { fields: 'name,status,language,components', limit: 50 }
+    });
+    const approved = (r.data.data || []).filter(t => t.status === 'APPROVED');
+    res.json({ success: true, data: approved });
+  } catch (e) {
+    res.json({ success: true, data: [] }); // non-fatal
+  }
 });
 
 // ── KNOWLEDGE BASE ────────────────────────────────────────────────
