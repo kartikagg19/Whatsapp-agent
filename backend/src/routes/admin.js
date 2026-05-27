@@ -9,7 +9,7 @@ const path     = require('path');
 const multer   = require('multer');
 const pdfParse = require('pdf-parse');
 const db       = require('../database');
-const { sendText } = require('../whatsapp');
+const { sendText, sendTemplate } = require('../whatsapp');
 const { syncTimeline } = require('../crmClient');
 
 const diskStorage = multer.diskStorage({
@@ -72,7 +72,11 @@ const DEFAULT_SETTINGS = {
   followup_hot_hours:   24,
   followup_warm_hours:  48,
   followup_cold_hours:  72,
-  followup_check_hours: 6
+  followup_check_hours: 6,
+  // Default template for first-contact (new numbers from CRM)
+  default_template_name:     '',   // e.g. "dreamhome_intro"
+  default_template_language: 'en', // "en", "en_US", "hi"
+  default_template_params:   ''    // comma-separated, e.g. "Niharika,Krishna Group"
 };
 
 function loadSettings() {
@@ -91,7 +95,7 @@ function getToken() {
 }
 
 function requireAuth(req, res, next) {
-  if (req.path === '/login' || req.path === '/whatsapp-test' || req.path === '/ai-test' || req.path === '/send' || req.path === '/kb-debug') return next();
+  if (req.path === '/login' || req.path === '/whatsapp-test' || req.path === '/ai-test' || req.path === '/send' || req.path === '/kb-debug' || req.path === '/export/csv') return next();
   const token = (req.headers['authorization'] || '').replace('Bearer ', '').trim();
   if (!token || token !== getToken()) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -220,6 +224,95 @@ router.get('/leads', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/export/full — all leads + all conversations for Excel export
+router.get('/export/full', async (req, res) => {
+  try {
+    const leads = await db.getAllLeads(2000);
+    const results = [];
+    const batchSize = 10;
+    for (let i = 0; i < leads.length; i += batchSize) {
+      const batch = leads.slice(i, i + batchSize);
+      const convoBatch = await Promise.all(
+        batch.map(l => db.getConversations(l.phone).catch(() => []))
+      );
+      batch.forEach((lead, idx) => {
+        const convos = convoBatch[idx];
+        if (convos.length === 0) {
+          results.push({ lead, role: '', message: '', msg_time: '' });
+        } else {
+          convos.forEach(c => {
+            results.push({
+              lead,
+              role:     c.role === 'assistant' ? 'Bot' : 'User',
+              message:  c.message || '',
+              msg_time: c.created_at || ''
+            });
+          });
+        }
+      });
+    }
+    res.json({ success: true, data: results });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/export/csv — downloads CSV directly from server (one row per user, each message in its own column)
+router.get('/export/csv', async (req, res) => {
+  try {
+    const leads = await db.getAllLeads(2000);
+
+    // Fetch all conversations
+    const grouped = {};
+    const batchSize = 10;
+    for (let i = 0; i < leads.length; i += batchSize) {
+      const batch = leads.slice(i, i + batchSize);
+      const convoBatch = await Promise.all(
+        batch.map(l => db.getConversations(l.phone).catch(() => []))
+      );
+      batch.forEach((lead, idx) => {
+        const phone = lead.phone;
+        if (!grouped[phone]) grouped[phone] = { lead, messages: [] };
+        convoBatch[idx].forEach(c => {
+          const sender = c.role === 'assistant' ? 'Bot' : 'User';
+          grouped[phone].messages.push(`[${sender}] ${c.message || ''}`);
+        });
+      });
+    }
+
+    const userList = Object.values(grouped);
+    const maxMsgs = Math.max(...userList.map(u => u.messages.length), 0);
+
+    // CSV helper
+    const esc = v => {
+      if (v === null || v === undefined) return '';
+      const s = String(v).replace(/\r?\n/g, ' ');
+      return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const fmtDate = ts => ts ? new Date(ts).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }) : '';
+
+    const baseHeaders = ['Name','Phone','Score','Status','Intent','Total Messages','Budget','Location','Timeline','Purpose','Site Visit','First Seen','Last Active'];
+    const msgHeaders  = Array.from({ length: maxMsgs }, (_, i) => `Message ${i + 1}`);
+    const header = [...baseHeaders, ...msgHeaders].map(esc).join(',');
+
+    const rows = userList.map(({ lead: l, messages }) => {
+      const base = [
+        l.name || 'Unknown', l.phone || '', l.score || 0, l.label || 'COLD',
+        (l.intent || 'general').replace('_', ' '), l.message_count || 0,
+        l.budget_range || '', l.location_preference || '', l.timeline || '', l.purpose || '',
+        l.site_visit_offered ? 'Yes' : 'No', fmtDate(l.created_at), fmtDate(l.last_message)
+      ];
+      const msgs = Array.from({ length: maxMsgs }, (_, i) => messages[i] || '');
+      return [...base, ...msgs].map(esc).join(',');
+    });
+
+    const date = new Date().toISOString().slice(0, 10);
+    const csv  = '﻿' + [header, ...rows].join('\r\n'); // BOM for Excel UTF-8
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="leads-${date}.csv"`);
+    res.send(csv);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /api/leads/:phone — single lead + full chat
 router.get('/leads/:phone', async (req, res) => {
   try {
@@ -232,60 +325,23 @@ router.get('/leads/:phone', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ────────────────────────────────────────────────────────────────
-// Template sender helper
-// ────────────────────────────────────────────────────────────────
-async function sendTemplate(phone, templateName, params, language) {
-  const axios = require('axios');
-  const token = process.env.WHATSAPP_TOKEN;
-  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-
-  if (!token || !phoneId) throw new Error('WHATSAPP_TOKEN or WHATSAPP_PHONE_NUMBER_ID not configured');
-
-  // Build template parameters
-  const components = params && params.length > 0 ? [{
-    type: 'body',
-    parameters: params.map(p => ({ type: 'text', text: String(p) }))
-  }] : [];
-
-  const payload = {
-    messaging_product: 'whatsapp',
-    recipient_type: 'individual',
-    to: phone,
-    type: 'template',
-    template: {
-      name: templateName,
-      language: { code: language || 'en' },
-      ...(components.length > 0 && { components })
-    }
-  };
-
-  const url = `https://graph.instagram.com/v20.0/${phoneId}/messages`;
-  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-
-  const resp = await axios.post(url, payload, { headers });
-  return resp.data;
-}
-
 // POST /api/send — trigger a WhatsApp message (CRM or dashboard)
 // ────────────────────────────────────────────────────────────────
-// CRM FLOW (PropelloCRM integration):
-//   Header: X-Webhook-Secret = CRM_WEBHOOK_SECRET
+// CRM FLOW:
+//   Header: X-Webhook-Secret = CRM_WEBHOOK_SECRET  (optional but recommended)
 //   Body: {
 //     phone: "91xxxxxxxxxx",
-//     message: "Hello...",
-//     call_id: "unique-id-for-idempotency",     (optional, CRM uses for dedupe)
-//     template: "campaign_name"                 (optional, for analytics)
+//     message: "Hello...",          ← used for free-form (existing contacts)
+//     call_id: "unique-id",         ← optional, prevents duplicate sends
+//     template_name: "dreamhome_intro",  ← NEW: use this for NEW numbers (first contact)
+//     template_params: ["Rahul"],        ← NEW: values for {{1}}, {{2}} etc.
+//     template_language: "en",           ← NEW: optional, defaults to "en"
 //   }
 //
-// DASHBOARD FLOW (legacy):
-//   No auth header (dashboard will be updated to send one, or see §7 risk)
-//   Body: { phone: "91xxxxxxxxxx", message: "Hello..." }
-//
-// Behavior:
-//   - Reject if X-Webhook-Secret provided but doesn't match CRM_WEBHOOK_SECRET
-//   - If call_id seen in last 24h, return 200 { success: true, deduped: true }
-//   - On Meta failure, return 200 { success: false, error: "..." }
+// HOW TO CHOOSE:
+//   - New number (never messaged you) → send template_name + template_params
+//   - Existing contact (messaged within 24h) → send message (free-form)
+//   - Both provided → template takes priority for safety
 // ────────────────────────────────────────────────────────────────
 
 router.post('/send', async (req, res) => {
@@ -298,85 +354,122 @@ router.post('/send', async (req, res) => {
     const isTemplateMode = !!template_name;
 
     // Log incoming request
-    if (isCrmTrigger) {
-      console.log(`\n📨 ╔═══════════════════════════════════════════`);
-      console.log(`   ║ CRM TRIGGER RECEIVED`);
-      console.log(`   ║ Time: ${timestamp}`);
-      console.log(`   ║ Phone: ${phone}`);
-      console.log(`   ║ Call ID: ${call_id || 'none'}`);
-      if (isTemplateMode) {
-        console.log(`   ║ Template: ${template_name}`);
-        console.log(`   ║ Params: ${(template_params || []).join(', ')}`);
-      } else {
-        console.log(`   ║ Message: ${message?.substring(0, 50)}...`);
-      }
-      console.log(`   ╚═══════════════════════════════════════════\n`);
+    console.log(`\n📨 ╔═══════════════════════════════════════════`);
+    console.log(`   ║ ${isCrmTrigger ? 'CRM' : 'DASHBOARD'} TRIGGER`);
+    console.log(`   ║ Time: ${timestamp}`);
+    console.log(`   ║ Phone: ${phone}`);
+    console.log(`   ║ Call ID: ${call_id || 'none'}`);
+    if (isTemplateMode) {
+      const logParams = Array.isArray(template_params)
+        ? template_params
+        : (template_params ? [template_params] : []);
+      console.log(`   ║ Template: ${template_name}`);
+      console.log(`   ║ Params: ${logParams.join(', ')}`);
+    } else if (message) {
+      console.log(`   ║ Message: ${String(message).substring(0, 50)}...`);
     }
+    console.log(`   ╚═══════════════════════════════════════════\n`);
 
-    // ──────────────────────────────────────────────────────────────
-    // AC1: Validate secret if provided (CRM flow) or if CRM is enabled
-    // ──────────────────────────────────────────────────────────────
+    // Validate auth
     if (headerSecret && headerSecret !== crmSecret) {
       console.error(`❌ CRM Auth Failed: Invalid X-Webhook-Secret for phone ${phone}`);
       return res.status(403).json({ error: 'Invalid X-Webhook-Secret' });
     }
 
-    // Validate: must have phone + (message OR template_name)
-    if (!phone || (!message && !template_name)) {
-      console.warn(`⚠️  Missing required fields: phone=${phone}, message=${message}, template_name=${template_name}`);
-      return res.status(400).json({ error: 'phone and (message or template_name) required' });
+    if (!phone) {
+      return res.status(400).json({ error: 'phone is required' });
     }
 
-    // Normalize phone: strip spaces, dashes, +; add 91 if 10-digit India number
+    // Normalize phone
     const cleanPhone = phone.replace(/[\s\-\+]/g, '');
     const normalizedPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
     if (normalizedPhone !== phone) console.log(`📞 Phone normalized: ${phone} → ${normalizedPhone}`);
 
-    // ──────────────────────────────────────────────────────────────
-    // AC2 & AC3: Check dedupe (if call_id provided, honor 24h window)
-    // ──────────────────────────────────────────────────────────────
+    // Dedupe check
     const isDuplicate = checkAndRecordCallId(call_id);
     if (isDuplicate) {
       console.log(`⏭️  DEDUPE: call_id=${call_id} already sent within 24h → skipping`);
       return res.status(200).json({ success: true, deduped: true });
     }
 
-    // ──────────────────────────────────────────────────────────────
-    // Send to Meta (either template or free-form message) and save locally
-    // ──────────────────────────────────────────────────────────────
+    // ── AUTO-TEMPLATE: if no template given, check if this is a new number ──
+    // If it is, auto-use the default_template_name from settings
+    let resolvedTemplateName = template_name?.trim() || '';
+    let resolvedTemplateParams = Array.isArray(template_params)
+      ? template_params
+      : (template_params ? [template_params] : []);
+    let resolvedTemplateLang = template_language || 'en';
+    let existingLead;
+
+    if (!resolvedTemplateName) {
+      existingLead = await db.getLeadByPhone(normalizedPhone).catch(() => null);
+      const isNewContact = !existingLead || !existingLead.message_count || existingLead.message_count === 0;
+      if (isNewContact) {
+        const s = loadSettings();
+        if (s.default_template_name && s.default_template_name.trim()) {
+          resolvedTemplateName = s.default_template_name.trim();
+          resolvedTemplateLang = s.default_template_language || 'en';
+          const rawParams = (s.default_template_params || '').split(',').map(p => p.trim()).filter(Boolean);
+          resolvedTemplateParams = rawParams.length ? rawParams : resolvedTemplateParams;
+          console.log(`🔄 AUTO-TEMPLATE: new contact detected → using default template "${resolvedTemplateName}"`);
+        }
+      }
+    }
+
+    const useTemplate = !!resolvedTemplateName;
+
+    if (!message && !useTemplate) {
+      console.warn(`⚠️  Missing required fields: phone=${phone}, message=${message}, template_name=${template_name}`);
+      return res.status(400).json({ error: 'phone and (message or template_name) required' });
+    }
+
+    const msgPrefix = call_id ? `[CRM ${call_id}]` : '[MANUAL]';
+    const templateParamText = resolvedTemplateParams.join(', ');
+    const templateSummary = `${msgPrefix} [TEMPLATE:${resolvedTemplateName}] ${templateParamText}`.trim();
+    const messageSummary = template ? `${msgPrefix} [${template}] ${message}` : `${msgPrefix} ${message}`;
+    const sentContent = useTemplate ? templateSummary : messageSummary;
+
+    // ── SEND ──────────────────────────────────────────────────────
     let sendError = null;
     let metaSuccess = false;
-    let sentVia = isTemplateMode ? 'template' : 'message';
+    const sentVia = useTemplate ? 'template' : 'message';
 
     try {
-      if (isTemplateMode) {
-        await sendTemplate(normalizedPhone, template_name, template_params, template_language);
+      if (useTemplate) {
+        await sendTemplate(normalizedPhone, resolvedTemplateName, resolvedTemplateLang, resolvedTemplateParams);
         metaSuccess = true;
-        console.log(`✅ Template '${template_name}' sent to ${normalizedPhone} via Meta WhatsApp`);
+        console.log(`✅ Template "${resolvedTemplateName}" sent to ${normalizedPhone}`);
       } else {
         await sendText(normalizedPhone, message);
         metaSuccess = true;
         console.log(`✅ Message sent to ${normalizedPhone} via Meta WhatsApp`);
       }
     } catch (err) {
-      // Extract the real Meta error message
       const metaErr = err.response?.data?.error;
       sendError = metaErr
         ? `Meta error ${metaErr.code}: ${metaErr.message}`
         : (err.message || 'Meta API error');
       console.error(`❌ SEND FAILED (${sentVia}) to ${normalizedPhone}:`, sendError);
+      if (!useTemplate && (sendError.includes('131047') || sendError.includes('outside'))) {
+        console.warn(`💡 HINT: This number may not have messaged in 24h. Use template_name instead of message.`);
+        sendError += ' — Use template_name for first-contact (new numbers).';
+      }
     }
 
-    // Save locally only if actually sent — avoid showing failed messages as sent
     if (metaSuccess) {
-      const msgPrefix = call_id ? `[CRM ${call_id}]` : '[MANUAL]';
-      let displayMsg;
-      if (isTemplateMode) {
-        displayMsg = `${msgPrefix} [TEMPLATE: ${template_name}] ${(template_params || []).join(', ')}`;
-      } else {
-        displayMsg = template ? `${msgPrefix} [${template}] ${message}` : `${msgPrefix} ${message}`;
+      await db.saveMessage({ phone: normalizedPhone, role: 'assistant', message: sentContent });
+      if (existingLead === undefined) {
+        existingLead = await db.getLeadByPhone(normalizedPhone).catch(() => null);
       }
-      await db.saveMessage({ phone: normalizedPhone, role: 'assistant', message: displayMsg });
+      if (!existingLead) {
+        await db.upsertLead({
+          phone: normalizedPhone,
+          name: resolvedTemplateParams?.[0] || 'Unknown',
+          score: 3,
+          label: 'COLD',
+          intent: 'general'
+        }).catch(() => {});
+      }
       console.log(`💾 ${sentVia[0].toUpperCase()}${sentVia.slice(1)} saved to database for ${normalizedPhone}`);
     }
 
@@ -388,24 +481,19 @@ router.post('/send', async (req, res) => {
       syncTimeline({
         phone: normalizedPhone,
         direction: 'outbound',
-        message,
+        message: sentContent || message,
         call_id,
         template
       }).catch(() => {});
       console.log(`✨ CRM Trigger synced to timeline for ${phone}`);
     }
 
-    // ──────────────────────────────────────────────────────────────
-    // AC4: Always return 200 even on Meta failure (CRM treats 2xx as delivered)
-    // ──────────────────────────────────────────────────────────────
     if (sendError) {
-      console.warn(`⚠️  CRM Request processed but Meta failed: ${sendError}`);
       return res.status(200).json({ success: false, error: sendError });
     }
 
     res.json({ success: true });
   } catch (e) {
-    // Unexpected error — log but still return 200 if CRM is involved
     console.error('💥 SEND Unexpected error:', e.message);
     res.status(200).json({ success: false, error: e.message });
   }
@@ -429,6 +517,55 @@ router.post('/broadcast', async (req, res) => {
     }
     res.json({ success: true, total: leads.length, sent, failed });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/broadcast-template — send approved template to NEW numbers (first contact)
+// Body: { phones: ["919876543210",...], template_name: "dreamhome_intro", language: "en", params: ["Rahul"] }
+// OR:   { phones: [...], template_name: "...", language: "en", params_map: {"919876543210": ["Rahul"], ...} }
+router.post('/broadcast-template', async (req, res) => {
+  try {
+    const { phones, template_name, language = 'en', params = [], params_map = {} } = req.body;
+    if (!phones || !Array.isArray(phones) || phones.length === 0)
+      return res.status(400).json({ error: 'phones array required' });
+    if (!template_name)
+      return res.status(400).json({ error: 'template_name required' });
+
+    let sent = 0, failed = 0, errors = [];
+    for (const rawPhone of phones) {
+      const phone = String(rawPhone).replace(/\D/g, '');
+      if (!phone) { failed++; continue; }
+      // Per-number params override global params
+      const p = params_map[phone] || params_map[rawPhone] || params;
+      try {
+        await sendTemplate(phone, template_name, language, p);
+        await db.saveMessage({ phone, role: 'assistant', message: `[TEMPLATE:${template_name}] ${p.join(', ')}` });
+        await db.upsertLead({ phone, name: p[0] || 'Unknown', score: 3, label: 'COLD', intent: 'general' });
+        sent++;
+        await new Promise(r => setTimeout(r, 350)); // stay under rate limit
+      } catch (e) {
+        failed++;
+        errors.push({ phone, error: e.response?.data?.error?.message || e.message });
+      }
+    }
+    res.json({ success: true, total: phones.length, sent, failed, errors: errors.slice(0, 20) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/templates — list approved WhatsApp templates from Meta
+router.get('/templates', async (req, res) => {
+  try {
+    const axios = require('axios');
+    const wabaId = process.env.WABA_ID || '';
+    if (!wabaId) return res.json({ success: true, data: [] });
+    const r = await axios.get(`https://graph.facebook.com/v20.0/${wabaId}/message_templates`, {
+      headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` },
+      params: { fields: 'name,status,language,components', limit: 50 }
+    });
+    const approved = (r.data.data || []).filter(t => t.status === 'APPROVED');
+    res.json({ success: true, data: approved });
+  } catch (e) {
+    res.json({ success: true, data: [] }); // non-fatal
+  }
 });
 
 // ── KNOWLEDGE BASE ────────────────────────────────────────────────
