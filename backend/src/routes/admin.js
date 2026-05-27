@@ -223,6 +223,39 @@ router.get('/leads', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/export/full — all leads + all conversations for Excel export
+router.get('/export/full', async (req, res) => {
+  try {
+    const leads = await db.getAllLeads(2000);
+    // Fetch all conversations in parallel (batch of 10 at a time to avoid DB overload)
+    const results = [];
+    const batchSize = 10;
+    for (let i = 0; i < leads.length; i += batchSize) {
+      const batch = leads.slice(i, i + batchSize);
+      const convoBatch = await Promise.all(
+        batch.map(l => db.getConversations(l.phone).catch(() => []))
+      );
+      batch.forEach((lead, idx) => {
+        const convos = convoBatch[idx];
+        if (convos.length === 0) {
+          // Lead with no messages — include one row with empty chat columns
+          results.push({ lead, role: '', message: '', msg_time: '' });
+        } else {
+          convos.forEach(c => {
+            results.push({
+              lead,
+              role:     c.role === 'assistant' ? 'Bot' : 'User',
+              message:  c.message || '',
+              msg_time: c.created_at || ''
+            });
+          });
+        }
+      });
+    }
+    res.json({ success: true, data: results });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /api/leads/:phone — single lead + full chat
 router.get('/leads/:phone', async (req, res) => {
   try {
