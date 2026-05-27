@@ -295,9 +295,12 @@ async function runPipeline(phone, buf) {
     const wasHotBefore = existingLead?.label === 'HOT';
     if (label === 'HOT' && !wasHotBefore && process.env.SALES_PHONE_NUMBER) {
       console.log(`🔥 NEW HOT lead — alerting sales: ${phone}`);
-      alertSales(process.env.SALES_PHONE_NUMBER, {
-        phone, name, score: ai.lead_score * 10, intent: ai.qualification_stage || 'general'
-      }).catch(e => console.warn('⚠️ Sales alert failed:', e.message));
+      const salesNumbers = process.env.SALES_PHONE_NUMBER.split(',').map(n => n.trim()).filter(Boolean);
+      salesNumbers.forEach(salesNum => {
+        alertSales(salesNum, {
+          phone, name, score: ai.lead_score * 10, intent: ai.qualification_stage || 'general'
+        }).catch(e => console.warn('⚠️ Sales alert failed:', e.message));
+      });
     }
 
     // ── CRM sync OUTBOUND only (inbound is synced from webhook.js) ──
