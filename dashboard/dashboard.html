@@ -686,7 +686,7 @@ const LeadsPage = ({leads,loading,onSelect,apiBase,isDemo}) => {
       const d = await r.json();
       if(!d.success) throw new Error(d.error||'Export failed');
 
-      // Group all messages by phone number — one row per user
+      // Group all messages by phone — one row per user, each message in its own column
       const grouped = {};
       d.data.forEach(row => {
         const phone = row.lead.phone;
@@ -695,22 +695,30 @@ const LeadsPage = ({leads,loading,onSelect,apiBase,isDemo}) => {
         }
         if(row.role && row.message){
           const sender = row.role === 'Bot' ? 'Bot' : 'User';
-          const time = row.msg_time ? fmtDate(row.msg_time) : '';
-          grouped[phone].messages.push(`[${sender} - ${time}] ${row.message}`);
+          grouped[phone].messages.push(`[${sender}] ${row.message}`);
         }
       });
 
-      const headers = ['Name','Phone','Score','Status','Intent','Total Messages','Budget','Location','Timeline','Purpose','Site Visit','First Seen','Last Active','Full Chat History'];
-      const rows = Object.values(grouped).map(item => {
+      // Find max messages count across all users
+      const userList = Object.values(grouped);
+      const maxMsgs = Math.max(...userList.map(u => u.messages.length), 0);
+
+      // Build header: lead info columns + Message 1, Message 2, ... Message N
+      const baseHeaders = ['Name','Phone','Score','Status','Intent','Total Messages','Budget','Location','Timeline','Purpose','Site Visit','First Seen','Last Active'];
+      const msgHeaders = Array.from({length: maxMsgs}, (_, i) => `Message ${i+1}`);
+      const headers = [...baseHeaders, ...msgHeaders];
+
+      const rows = userList.map(item => {
         const l = item.lead;
-        const chatHistory = item.messages.join(' | ');
-        return [
+        const baseData = [
           l.name||'Unknown', l.phone||'', l.score||0, l.label||'COLD',
           (l.intent||'general').replace('_',' '), l.message_count||0,
           l.budget_range||'', l.location_preference||'', l.timeline||'', l.purpose||'',
-          l.site_visit_offered?'Yes':'No', fmtDate(l.created_at), fmtDate(l.last_message),
-          chatHistory
-        ].map(toCSV).join(',');
+          l.site_visit_offered?'Yes':'No', fmtDate(l.created_at), fmtDate(l.last_message)
+        ];
+        // Pad messages with empty strings so all rows have same number of columns
+        const msgData = Array.from({length: maxMsgs}, (_, i) => item.messages[i] || '');
+        return [...baseData, ...msgData].map(toCSV).join(',');
       });
 
       const date = new Date().toISOString().slice(0,10);
