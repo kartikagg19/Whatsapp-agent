@@ -680,51 +680,7 @@ const LeadsPage = ({leads,loading,onSelect,apiBase,isDemo}) => {
     if(isDemo||!apiBase||apiBase==='DEMO'){
       alert('Connect your backend to export chat history.');return;
     }
-    setExporting(true);
-    try{
-      const r = await apiFetch(`${apiBase}/export/full`);
-      const d = await r.json();
-      if(!d.success) throw new Error(d.error||'Export failed');
-
-      // Group all messages by phone — one row per user, each message in its own column
-      const grouped = {};
-      d.data.forEach(row => {
-        const phone = row.lead.phone;
-        if(!grouped[phone]){
-          grouped[phone] = { lead: row.lead, messages: [] };
-        }
-        if(row.role && row.message){
-          const sender = row.role === 'Bot' ? 'Bot' : 'User';
-          grouped[phone].messages.push(`[${sender}] ${row.message}`);
-        }
-      });
-
-      // Find max messages count across all users
-      const userList = Object.values(grouped);
-      const maxMsgs = Math.max(...userList.map(u => u.messages.length), 0);
-
-      // Build header: lead info columns + Message 1, Message 2, ... Message N
-      const baseHeaders = ['Name','Phone','Score','Status','Intent','Total Messages','Budget','Location','Timeline','Purpose','Site Visit','First Seen','Last Active'];
-      const msgHeaders = Array.from({length: maxMsgs}, (_, i) => `Message ${i+1}`);
-      const headers = [...baseHeaders, ...msgHeaders];
-
-      const rows = userList.map(item => {
-        const l = item.lead;
-        const baseData = [
-          l.name||'Unknown', l.phone||'', l.score||0, l.label||'COLD',
-          (l.intent||'general').replace('_',' '), l.message_count||0,
-          l.budget_range||'', l.location_preference||'', l.timeline||'', l.purpose||'',
-          l.site_visit_offered?'Yes':'No', fmtDate(l.created_at), fmtDate(l.last_message)
-        ];
-        // Pad messages with empty strings so all rows have same number of columns
-        const msgData = Array.from({length: maxMsgs}, (_, i) => item.messages[i] || '');
-        return [...baseData, ...msgData].map(toCSV).join(',');
-      });
-
-      const date = new Date().toISOString().slice(0,10);
-      downloadCSV([headers.join(','),...rows].join('\r\n'), `leads-with-chats-${date}.csv`);
-    }catch(e){alert('Export failed: '+e.message);}
-    setExporting(false);
+    window.open(apiBase + '/export/csv', '_blank');
   }
 
   return h('div',{className:'card'},

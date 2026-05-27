@@ -94,7 +94,7 @@ function getToken() {
 }
 
 function requireAuth(req, res, next) {
-  if (req.path === '/login' || req.path === '/whatsapp-test' || req.path === '/ai-test' || req.path === '/send' || req.path === '/kb-debug') return next();
+  if (req.path === '/login' || req.path === '/whatsapp-test' || req.path === '/ai-test' || req.path === '/send' || req.path === '/kb-debug' || req.path === '/export/csv') return next();
   const token = (req.headers['authorization'] || '').replace('Bearer ', '').trim();
   if (!token || token !== getToken()) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -227,7 +227,6 @@ router.get('/leads', async (req, res) => {
 router.get('/export/full', async (req, res) => {
   try {
     const leads = await db.getAllLeads(2000);
-    // Fetch all conversations in parallel (batch of 10 at a time to avoid DB overload)
     const results = [];
     const batchSize = 10;
     for (let i = 0; i < leads.length; i += batchSize) {
@@ -238,7 +237,6 @@ router.get('/export/full', async (req, res) => {
       batch.forEach((lead, idx) => {
         const convos = convoBatch[idx];
         if (convos.length === 0) {
-          // Lead with no messages — include one row with empty chat columns
           results.push({ lead, role: '', message: '', msg_time: '' });
         } else {
           convos.forEach(c => {
@@ -253,6 +251,64 @@ router.get('/export/full', async (req, res) => {
       });
     }
     res.json({ success: true, data: results });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/export/csv — downloads CSV directly from server (one row per user, each message in its own column)
+router.get('/export/csv', async (req, res) => {
+  try {
+    const leads = await db.getAllLeads(2000);
+
+    // Fetch all conversations
+    const grouped = {};
+    const batchSize = 10;
+    for (let i = 0; i < leads.length; i += batchSize) {
+      const batch = leads.slice(i, i + batchSize);
+      const convoBatch = await Promise.all(
+        batch.map(l => db.getConversations(l.phone).catch(() => []))
+      );
+      batch.forEach((lead, idx) => {
+        const phone = lead.phone;
+        if (!grouped[phone]) grouped[phone] = { lead, messages: [] };
+        convoBatch[idx].forEach(c => {
+          const sender = c.role === 'assistant' ? 'Bot' : 'User';
+          grouped[phone].messages.push(`[${sender}] ${c.message || ''}`);
+        });
+      });
+    }
+
+    const userList = Object.values(grouped);
+    const maxMsgs = Math.max(...userList.map(u => u.messages.length), 0);
+
+    // CSV helper
+    const esc = v => {
+      if (v === null || v === undefined) return '';
+      const s = String(v).replace(/\r?\n/g, ' ');
+      return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const fmtDate = ts => ts ? new Date(ts).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }) : '';
+
+    const baseHeaders = ['Name','Phone','Score','Status','Intent','Total Messages','Budget','Location','Timeline','Purpose','Site Visit','First Seen','Last Active'];
+    const msgHeaders  = Array.from({ length: maxMsgs }, (_, i) => `Message ${i + 1}`);
+    const header = [...baseHeaders, ...msgHeaders].map(esc).join(',');
+
+    const rows = userList.map(({ lead: l, messages }) => {
+      const base = [
+        l.name || 'Unknown', l.phone || '', l.score || 0, l.label || 'COLD',
+        (l.intent || 'general').replace('_', ' '), l.message_count || 0,
+        l.budget_range || '', l.location_preference || '', l.timeline || '', l.purpose || '',
+        l.site_visit_offered ? 'Yes' : 'No', fmtDate(l.created_at), fmtDate(l.last_message)
+      ];
+      const msgs = Array.from({ length: maxMsgs }, (_, i) => messages[i] || '');
+      return [...base, ...msgs].map(esc).join(',');
+    });
+
+    const date = new Date().toISOString().slice(0, 10);
+    const csv  = '﻿' + [header, ...rows].join('\r\n'); // BOM for Excel UTF-8
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="leads-${date}.csv"`);
+    res.send(csv);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
