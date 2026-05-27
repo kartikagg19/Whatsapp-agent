@@ -422,6 +422,117 @@ const BroadcastModal = ({apiBase,isDemo,onClose,showToast,leads}) => {
   );
 };
 
+/* ─── TEMPLATE CAMPAIGN MODAL ─────────────────────────────────── */
+const TemplateCampaignModal = ({apiBase,isDemo,onClose,showToast}) => {
+  const [phones,setPhones]=useState('');
+  const [tmplName,setTmplName]=useState('');
+  const [lang,setLang]=useState('en');
+  const [param1,setParam1]=useState('');
+  const [busy,setBusy]=useState(false);
+  const [result,setResult]=useState(null);
+  const [templates,setTemplates]=useState([]);
+
+  useEffect(()=>{
+    if(isDemo||!apiBase||apiBase==='DEMO')return;
+    apiFetch(`${apiBase}/templates`).then(r=>r.json()).then(d=>{
+      if(d.success&&d.data.length) setTemplates(d.data);
+    }).catch(()=>{});
+  },[apiBase,isDemo]);
+
+  function parsePhones(){
+    return phones.split(/[\n,;]+/).map(p=>p.trim().replace(/\D/g,'')).filter(p=>p.length>=10);
+  }
+
+  async function send(){
+    const list=parsePhones();
+    if(!list.length){showToast('Enter at least one phone number','err');return;}
+    if(!tmplName.trim()){showToast('Enter template name','err');return;}
+    if(isDemo){showToast('Demo mode — connect backend first','err');return;}
+    setBusy(true);setResult(null);
+    try{
+      const params=param1.trim()?[param1.trim()]:[];
+      const r=await apiFetch(`${apiBase}/broadcast-template`,{method:'POST',
+        body:JSON.stringify({phones:list,template_name:tmplName.trim(),language:lang,params})});
+      const d=await r.json();
+      if(d.success){
+        setResult(d);
+        showToast(`Template sent to ${d.sent}/${d.total} numbers`,'success');
+      } else showToast(d.error||'Failed','err');
+    }catch{showToast('Cannot connect to backend','err');}
+    setBusy(false);
+  }
+
+  const list=parsePhones();
+  return h('div',{className:'overlay',onClick:e=>e.target===e.currentTarget&&onClose()},
+    h('div',{className:'modal',style:{maxWidth:'600px'}},
+      h('div',{className:'modal-hd'},
+        h('div',null,
+          h('div',{className:'modal-hd-title'},'📨 Template Campaign'),
+          h('div',{className:'modal-hd-sub'},'Send first message to new numbers using approved WhatsApp template')
+        ),
+        h('button',{className:'x-btn',onClick:onClose},h('i',{className:'ti ti-x'}))
+      ),
+      h('div',{className:'modal-bd'},
+        h('div',{className:'notice',style:{background:'#FFF8E1',borderColor:'#FFD54F',color:'#7C5700'}},
+          h('i',{className:'ti ti-info-circle'}),
+          'WhatsApp Rule: Free-form messages only deliver within 24h of user messaging you. For NEW numbers → use approved templates.'
+        ),
+        h('div',{className:'form-field'},
+          h('label',{className:'form-label'},'Phone Numbers (one per line OR comma-separated)'),
+          h('textarea',{
+            value:phones,onChange:e=>setPhones(e.target.value),
+            placeholder:'919876543210\n918765432109\n919123456789\n\nCountry code required (91 for India)',
+            style:{minHeight:'100px',fontFamily:'var(--mono)',fontSize:'12px'}
+          }),
+          list.length>0&&h('div',{style:{fontSize:'11px',color:'var(--green)',fontFamily:'var(--mono)',marginTop:'4px'}},
+            `✓ ${list.length} valid number${list.length!==1?'s':''} detected`)
+        ),
+        h('div',{style:{display:'grid',gridTemplateColumns:'1fr 100px',gap:'10px'}},
+          h('div',{className:'form-field',style:{marginBottom:0}},
+            h('label',{className:'form-label'},'Template Name'),
+            templates.length>0
+              ? h('select',{value:tmplName,onChange:e=>setTmplName(e.target.value)},
+                  h('option',{value:''},'— Select approved template —'),
+                  templates.map(t=>h('option',{key:t.name,value:t.name},t.name))
+                )
+              : h('input',{value:tmplName,onChange:e=>setTmplName(e.target.value),
+                  placeholder:'dreamhome_intro'})
+          ),
+          h('div',{className:'form-field',style:{marginBottom:0}},
+            h('label',{className:'form-label'},'Language'),
+            h('select',{value:lang,onChange:e=>setLang(e.target.value)},
+              h('option',{value:'en'},'English'),
+              h('option',{value:'en_US'},'en_US'),
+              h('option',{value:'hi'},'Hindi')
+            )
+          )
+        ),
+        h('div',{className:'form-field',style:{marginTop:'10px'}},
+          h('label',{className:'form-label'},'Variable {{1}} — Customer Name (optional)'),
+          h('input',{value:param1,onChange:e=>setParam1(e.target.value),
+            placeholder:'e.g. Rahul  (same name sent to all — leave blank if template has no variables)'})
+        ),
+        h('div',{className:'notice',style:{marginTop:'4px',fontSize:'11px'}},
+          h('i',{className:'ti ti-bulb'}),
+          'To send different names per number, use your CRM\'s API integration with the /api/broadcast-template endpoint and pass params_map.'
+        ),
+        result&&h('div',{style:{background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:'var(--r)',padding:'10px 13px',fontSize:'12px',fontFamily:'var(--mono)',marginTop:'10px'}},
+          h('div',{style:{color:'var(--green)',fontWeight:600,marginBottom:'4px'}},`✓ Sent: ${result.sent} / ${result.total}`),
+          result.failed>0&&h('div',{style:{color:'var(--hot)',marginBottom:'4px'}},`✗ Failed: ${result.failed}`),
+          result.errors&&result.errors.length>0&&h('div',{style:{marginTop:'6px',color:'var(--text3)'}},
+            result.errors.slice(0,5).map((e,i)=>h('div',{key:i},`${e.phone}: ${e.error}`))
+          )
+        )
+      ),
+      h('div',{className:'modal-ft'},
+        h('button',{className:'btn btn-ghost',onClick:onClose},'Close'),
+        h('button',{className:'btn btn-primary',onClick:send,disabled:busy||!list.length||!tmplName.trim()},
+          busy?h(Spinner):h('i',{className:'ti ti-send'}),' ',busy?`Sending ${list.length}...`:`Send to ${list.length} number${list.length!==1?'s':''}`)
+      )
+    )
+  );
+};
+
 /* ─── CONNECT MODAL ───────────────────────────────────────────── */
 const ConnectModal = ({apiBase,setApiBase,onClose,showToast}) => {
   const [url,setUrl]=useState(apiBase==='DEMO'?'':apiBase);
@@ -526,15 +637,89 @@ const Overview = ({stats,leads,loading,onSelect,isDemo}) => {
 };
 
 /* ─── ALL LEADS PAGE ──────────────────────────────────────────── */
-const LeadsPage = ({leads,loading,onSelect}) => {
+const LeadsPage = ({leads,loading,onSelect,apiBase,isDemo}) => {
   const [search,setSearch]=useState('');
   const [filter,setFilter]=useState('ALL');
+  const [exporting,setExporting]=useState(false);
   const visible=leads.filter(l=>{
     const fm=filter==='ALL'||l.label===filter;
     const sm=!search||(l.name||'').toLowerCase().includes(search.toLowerCase())||(l.phone||'').includes(search);
     return fm&&sm;
   });
   const counts={ALL:leads.length,HOT:leads.filter(l=>l.label==='HOT').length,WARM:leads.filter(l=>l.label==='WARM').length,COLD:leads.filter(l=>l.label==='COLD').length};
+
+  const toCSV = v => {
+    if(v===null||v===undefined) return '';
+    const s = String(v).replace(/\r?\n/g,' ');
+    return s.includes(',')||s.includes('"') ? `"${s.replace(/"/g,'""')}"` : s;
+  };
+  const fmtDate = ts => ts ? new Date(ts).toLocaleString('en-IN',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:true}) : '';
+
+  function downloadCSV(csvContent, filename){
+    const bom = '﻿'; // UTF-8 BOM for Excel
+    const blob = new Blob([bom+csvContent],{type:'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href=url; a.download=filename; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // Quick export — leads only, no API call needed
+  function exportLeadsOnly(){
+    const headers = ['Name','Phone','Score','Status','Intent','Messages','Budget','Location','Timeline','Purpose','Site Visit','First Seen','Last Active'];
+    const rows = leads.map(l=>[
+      l.name||'Unknown', l.phone||'', l.score||0, l.label||'COLD',
+      (l.intent||'general').replace('_',' '), l.message_count||0,
+      l.budget_range||'', l.location_preference||'', l.timeline||'', l.purpose||'',
+      l.site_visit_offered?'Yes':'No', fmtDate(l.created_at), fmtDate(l.last_message)
+    ].map(toCSV).join(','));
+    const date = new Date().toISOString().slice(0,10);
+    downloadCSV([headers.join(','),...rows].join('\r\n'), `leads-${date}.csv`);
+  }
+
+  // Full export — leads + complete chat history (requires backend)
+  async function exportWithChats(){
+    if(isDemo||!apiBase||apiBase==='DEMO'){
+      alert('Connect your backend to export chat history.');return;
+    }
+    setExporting(true);
+    try{
+      const r = await apiFetch(`${apiBase}/export/full`);
+      const d = await r.json();
+      if(!d.success) throw new Error(d.error||'Export failed');
+
+      // Group all messages by phone — one row per user, full chat in one column
+      const grouped = {};
+      d.data.forEach(row => {
+        const phone = row.lead.phone;
+        if(!grouped[phone]){
+          grouped[phone] = { lead: row.lead, messages: [] };
+        }
+        if(row.role && row.message){
+          const sender = row.role === 'Bot' ? 'Bot' : 'User';
+          const time = row.msg_time ? fmtDate(row.msg_time) : '';
+          grouped[phone].messages.push(`[${sender} - ${time}] ${row.message}`);
+        }
+      });
+
+      const headers = ['Name','Phone','Score','Status','Intent','Total Messages','Budget','Location','Timeline','Purpose','Site Visit','First Seen','Last Active','Full Chat History'];
+      const rows = Object.values(grouped).map(item => {
+        const l = item.lead;
+        const chatHistory = item.messages.join(' | ');
+        return [
+          l.name||'Unknown', l.phone||'', l.score||0, l.label||'COLD',
+          (l.intent||'general').replace('_',' '), l.message_count||0,
+          l.budget_range||'', l.location_preference||'', l.timeline||'', l.purpose||'',
+          l.site_visit_offered?'Yes':'No', fmtDate(l.created_at), fmtDate(l.last_message),
+          chatHistory
+        ].map(toCSV).join(',');
+      });
+      const date = new Date().toISOString().slice(0,10);
+      downloadCSV([headers.join(','),...rows].join('\r\n'), `leads-with-chats-${date}.csv`);
+    }catch(e){alert('Export failed: '+e.message);}
+    setExporting(false);
+  }
+
   return h('div',{className:'card'},
     h('div',{className:'card-hd',style:{flexWrap:'wrap',gap:'8px'}},
       h('span',{className:'card-title'},'All Leads'),
@@ -548,7 +733,11 @@ const LeadsPage = ({leads,loading,onSelect}) => {
         h('div',{className:'inp-wrap',style:{width:'200px'}},
           h('i',{className:'ti ti-search'}),
           h('input',{value:search,onChange:e=>setSearch(e.target.value),placeholder:'Search name or phone...'})
-        )
+        ),
+        h('button',{className:'btn btn-ghost btn-sm',onClick:exportLeadsOnly,disabled:leads.length===0,title:'Download leads summary (no chat history)'},
+          h('i',{className:'ti ti-table-export'}),' Export Leads'),
+        h('button',{className:'btn btn-primary btn-sm',onClick:exportWithChats,disabled:exporting||leads.length===0,title:'Download leads + full conversation history'},
+          exporting?h(Spinner):h('i',{className:'ti ti-message-report'}),' ',exporting?'Exporting...':'Export with Chats')
       )
     ),
     loading?h('div',{className:'empty',style:{padding:'56px'}},h(Spinner)):
@@ -731,6 +920,7 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
     {k:'prompt',  icon:'ti-file-text',l:'System Prompt'},
     {k:'props',   icon:'ti-building', l:'Properties'},
     {k:'alerts',  icon:'ti-bell',     l:'Alerts & Hours'},
+    {k:'crm',     icon:'ti-users-group',l:'CRM & Templates'},
     {k:'kb',      icon:'ti-database', l:'Knowledge Base'},
   ];
 
@@ -907,6 +1097,75 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
         ),
         !s.office_hours_on&&h('div',{style:{fontSize:'12px',color:'var(--text3)'}},
           'Bot is currently active 24 / 7.')
+      )
+    )
+  );
+
+  /* CRM & Templates tab */
+  const crmTab=h('div',{style:{display:'flex',flexDirection:'column',gap:'14px'}},
+    h('div',{className:'card'},
+      h('div',{className:'card-hd'},h('span',{className:'card-title'},'Default First Message Template')),
+      h('div',{className:'card-bd'},
+        h('div',{className:'notice',style:{background:'#FFF8E1',borderColor:'#FFD54F',color:'#7C5700',marginBottom:'14px'}},
+          h('i',{className:'ti ti-info-circle'}),
+          h('span',null,
+            'WhatsApp only delivers free-form messages to people who messaged you in the last 24h. ',
+            h('strong',null,'For new CRM numbers → create an approved template on Meta, set its name below.')
+          )
+        ),
+        h(Field,{label:'Default Template Name',
+          hint:'When your CRM triggers a message to a NEW number, this template is sent automatically instead of free-form text.'},
+          h('input',{
+            value:s.default_template_name||'',
+            onChange:e=>set('default_template_name',e.target.value),
+            placeholder:'e.g. dreamhome_intro'
+          })
+        ),
+        h(Field,{label:'Template Language',hint:'Must match the language set when you created the template on Meta'},
+          h('select',{value:s.default_template_language||'en',onChange:e=>set('default_template_language',e.target.value)},
+            h('option',{value:'en'},'English (en)'),
+            h('option',{value:'en_US'},'English US (en_US)'),
+            h('option',{value:'hi'},'Hindi (hi)')
+          )
+        ),
+        h(Field,{label:'Default Template Variables',
+          hint:'Comma-separated values for {{1}}, {{2}} etc. in your template. Leave blank if template has no variables.'},
+          h('input',{
+            value:s.default_template_params||'',
+            onChange:e=>set('default_template_params',e.target.value),
+            placeholder:'e.g. Niharika,Krishna Group'
+          })
+        ),
+        h('div',{style:{background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:'var(--r)',padding:'12px 14px'}},
+          h('div',{style:{fontSize:'10.5px',fontWeight:'600',color:'var(--text3)',fontFamily:'var(--mono)',textTransform:'uppercase',letterSpacing:'0.07em',marginBottom:'8px'}},'How It Works'),
+          h('div',{style:{fontSize:'12px',color:'var(--text2)',lineHeight:'1.8'}},
+            '1. Create template on Meta Business Manager → Message Templates',h('br',null),
+            '2. Set template name here (e.g. ',h('code',{style:{fontFamily:'var(--mono)',background:'var(--surface3)',padding:'1px 5px',borderRadius:'3px'}},'dreamhome_intro'),') → Save',h('br',null),
+            '3. Your CRM triggers ',h('code',{style:{fontFamily:'var(--mono)',background:'var(--surface3)',padding:'1px 5px',borderRadius:'3px'}},'POST /api/send'),' as normal — no changes needed in CRM',h('br',null),
+            '4. Bot auto-detects new numbers → sends template → user replies → AI takes over ✅'
+          )
+        )
+      )
+    ),
+    h('div',{className:'card'},
+      h('div',{className:'card-hd'},h('span',{className:'card-title'},'CRM Webhook Integration')),
+      h('div',{className:'card-bd'},
+        h(Field,{label:'CRM Webhook Secret (X-Webhook-Secret header)',hint:'Set the same value in your CRM for security. Leave blank to skip auth.'},
+          h('input',{
+            value:s.crm_webhook_secret||'',
+            onChange:e=>set('crm_webhook_secret',e.target.value),
+            placeholder:'e.g. mysecretkey123',
+            type:'text'
+          })
+        ),
+        h('div',{style:{background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:'var(--r)',padding:'12px 14px'}},
+          h('div',{style:{fontSize:'10.5px',fontWeight:'600',color:'var(--text3)',fontFamily:'var(--mono)',textTransform:'uppercase',letterSpacing:'0.07em',marginBottom:'8px'}},'CRM API Endpoint'),
+          h('div',{style:{fontFamily:'var(--mono)',fontSize:'12px',color:'var(--text2)',lineHeight:'2'}},
+            h('div',null,h('strong',null,'URL: '),'POST ',h('code',{style:{background:'var(--surface3)',padding:'1px 5px',borderRadius:'3px'}},`${apiBase==='DEMO'?'https://your-app.railway.app/api':apiBase}/send`)),
+            h('div',null,h('strong',null,'New number: '),'just send ',h('code',{style:{background:'var(--surface3)',padding:'1px 5px',borderRadius:'3px'}},'{phone, message}'),' — template auto-applied'),
+            h('div',null,h('strong',null,'Existing contact: '),'same call — free-form delivered')
+          )
+        )
       )
     )
   );
@@ -1139,6 +1398,7 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
     tab==='prompt'  &&promptTab,
     tab==='props'   &&propsTab,
     tab==='alerts'  &&alertsTab,
+    tab==='crm'     &&crmTab,
     tab==='kb'      &&h(KnowledgeTab,null),
     saveBar
   );
@@ -1264,6 +1524,7 @@ function App(){
   const [loading,  setLoading]=useState(false);
   const [selected, setSelected]=useState(null);
   const [showBcast,setBcast]  =useState(false);
+  const [showTmpl, setTmpl]   =useState(false);
   const [showConn, setConn]   =useState(false);
   const [toast,    setToast]  =useState(null);
   const isDemo=apiBase==='DEMO';
@@ -1318,6 +1579,7 @@ function App(){
         )),
         h('div',{className:'nav-grp'},'Actions'),
         h('button',{className:'nav-btn',onClick:()=>setBcast(true)},h('i',{className:'ti ti-speakerphone'}),'Broadcast'),
+        h('button',{className:'nav-btn',onClick:()=>setTmpl(true)},h('i',{className:'ti ti-send'}),'Template Campaign'),
         h('button',{className:'nav-btn',onClick:fetchData},h('i',{className:`ti ti-refresh${loading?' spin':''}`}),'Refresh'),
         h('button',{className:'nav-btn',onClick:()=>setConn(true)},h('i',{className:'ti ti-plug'}),'Connect Backend')
       ),
@@ -1349,14 +1611,15 @@ function App(){
       h('div',{className:'content'},
         page==='overview'       ?h(Overview,         {stats,leads,loading,onSelect:setSelected,isDemo}):
         page==='pipeline'       ?h(PipelinePage,     {leads,loading,onSelect:setSelected}):
-        page==='leads'          ?h(LeadsPage,        {leads,loading,onSelect:setSelected}):
+        page==='leads'          ?h(LeadsPage,        {leads,loading,onSelect:setSelected,apiBase,isDemo}):
         page==='agent-settings' ?h(AgentSettingsPage,{apiBase,isDemo,showToast}):
         page==='costs'          ?h(CostsPage,        {apiBase,isDemo}):null
       )
     ),
-    selected  &&h(LeadModal,     {lead:selected,apiBase,isDemo,onClose:()=>setSelected(null),showToast}),
-    showBcast &&h(BroadcastModal,{apiBase,isDemo,onClose:()=>setBcast(false),showToast,leads}),
-    showConn  &&h(ConnectModal,  {apiBase,setApiBase,onClose:()=>setConn(false),showToast}),
+    selected  &&h(LeadModal,          {lead:selected,apiBase,isDemo,onClose:()=>setSelected(null),showToast}),
+    showBcast &&h(BroadcastModal,     {apiBase,isDemo,onClose:()=>setBcast(false),showToast,leads}),
+    showTmpl  &&h(TemplateCampaignModal,{apiBase,isDemo,onClose:()=>setTmpl(false),showToast}),
+    showConn  &&h(ConnectModal,       {apiBase,setApiBase,onClose:()=>setConn(false),showToast}),
     toast     &&h(Toast,{key:toast.id,msg:toast.msg,type:toast.type,onDone:()=>setToast(null)})
   );
 }
