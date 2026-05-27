@@ -10,6 +10,7 @@ const multer   = require('multer');
 const pdfParse = require('pdf-parse');
 const db       = require('../database');
 const { sendText, sendTemplate } = require('../whatsapp');
+const { syncTimeline } = require('../crmClient');
 
 const diskStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, os.tmpdir()),
@@ -345,12 +346,12 @@ router.get('/leads/:phone', async (req, res) => {
 
 router.post('/send', async (req, res) => {
   try {
-    const { phone, message, call_id, template,
-            template_name, template_params, template_language } = req.body;
+    const { phone, message, call_id, template, template_name, template_params, template_language } = req.body;
     const headerSecret = req.headers['x-webhook-secret'];
     const crmSecret = process.env.CRM_WEBHOOK_SECRET || '';
     const isCrmTrigger = !!headerSecret;
     const timestamp = new Date().toISOString();
+    const isTemplateMode = !!template_name;
 
     // Log incoming request
     console.log(`\n📨 ╔═══════════════════════════════════════════`);
@@ -358,6 +359,15 @@ router.post('/send', async (req, res) => {
     console.log(`   ║ Time: ${timestamp}`);
     console.log(`   ║ Phone: ${phone}`);
     console.log(`   ║ Call ID: ${call_id || 'none'}`);
+    if (isTemplateMode) {
+      const logParams = Array.isArray(template_params)
+        ? template_params
+        : (template_params ? [template_params] : []);
+      console.log(`   ║ Template: ${template_name}`);
+      console.log(`   ║ Params: ${logParams.join(', ')}`);
+    } else if (message) {
+      console.log(`   ║ Message: ${String(message).substring(0, 50)}...`);
+    }
     console.log(`   ╚═══════════════════════════════════════════\n`);
 
     // Validate auth
@@ -368,9 +378,6 @@ router.post('/send', async (req, res) => {
 
     if (!phone) {
       return res.status(400).json({ error: 'phone is required' });
-    }
-    if (!template_name && !message) {
-      return res.status(400).json({ error: 'Either message (free-form) or template_name (new contact) is required' });
     }
 
     // Normalize phone
@@ -392,16 +399,16 @@ router.post('/send', async (req, res) => {
       ? template_params
       : (template_params ? [template_params] : []);
     let resolvedTemplateLang = template_language || 'en';
+    let existingLead;
 
     if (!resolvedTemplateName) {
-      const existingLead = await db.getLeadByPhone(normalizedPhone).catch(() => null);
+      existingLead = await db.getLeadByPhone(normalizedPhone).catch(() => null);
       const isNewContact = !existingLead || !existingLead.message_count || existingLead.message_count === 0;
       if (isNewContact) {
         const s = loadSettings();
         if (s.default_template_name && s.default_template_name.trim()) {
           resolvedTemplateName = s.default_template_name.trim();
           resolvedTemplateLang = s.default_template_language || 'en';
-          // Parse comma-separated default params, substitute {name} placeholder
           const rawParams = (s.default_template_params || '').split(',').map(p => p.trim()).filter(Boolean);
           resolvedTemplateParams = rawParams.length ? rawParams : resolvedTemplateParams;
           console.log(`🔄 AUTO-TEMPLATE: new contact detected → using default template "${resolvedTemplateName}"`);
@@ -411,58 +418,80 @@ router.post('/send', async (req, res) => {
 
     const useTemplate = !!resolvedTemplateName;
 
+    if (!message && !useTemplate) {
+      console.warn(`⚠️  Missing required fields: phone=${phone}, message=${message}, template_name=${template_name}`);
+      return res.status(400).json({ error: 'phone and (message or template_name) required' });
+    }
+
+    const msgPrefix = call_id ? `[CRM ${call_id}]` : '[MANUAL]';
+    const templateParamText = resolvedTemplateParams.join(', ');
+    const templateSummary = `${msgPrefix} [TEMPLATE:${resolvedTemplateName}] ${templateParamText}`.trim();
+    const messageSummary = template ? `${msgPrefix} [${template}] ${message}` : `${msgPrefix} ${message}`;
+    const sentContent = useTemplate ? templateSummary : messageSummary;
+
     // ── SEND ──────────────────────────────────────────────────────
     let sendError = null;
     let metaSuccess = false;
-    let sentContent = '';
+    const sentVia = useTemplate ? 'template' : 'message';
 
-    if (useTemplate) {
-      // Template message — works for NEW numbers (first contact)
-      try {
+    try {
+      if (useTemplate) {
         await sendTemplate(normalizedPhone, resolvedTemplateName, resolvedTemplateLang, resolvedTemplateParams);
         metaSuccess = true;
-        sentContent = `[TEMPLATE:${resolvedTemplateName}] ${resolvedTemplateParams.join(', ')}`;
         console.log(`✅ Template "${resolvedTemplateName}" sent to ${normalizedPhone}`);
-      } catch (err) {
-        const metaErr = err.response?.data?.error;
-        sendError = metaErr
-          ? `Meta error ${metaErr.code}: ${metaErr.message}`
-          : (err.message || 'Meta API error');
-        console.error(`❌ TEMPLATE SEND FAILED to ${normalizedPhone}:`, sendError);
-      }
-    } else {
-      // Free-form message — only works if user messaged within last 24h
-      try {
+      } else {
         await sendText(normalizedPhone, message);
         metaSuccess = true;
-        const msgPrefix = call_id ? `[CRM ${call_id}]` : '[MANUAL]';
-        sentContent = template ? `${msgPrefix} [${template}] ${message}` : `${msgPrefix} ${message}`;
         console.log(`✅ Message sent to ${normalizedPhone} via Meta WhatsApp`);
-      } catch (err) {
-        const metaErr = err.response?.data?.error;
-        sendError = metaErr
-          ? `Meta error ${metaErr.code}: ${metaErr.message}`
-          : (err.message || 'Meta API error');
-        console.error(`❌ SEND FAILED to ${normalizedPhone}:`, sendError);
-        // Hint if it looks like a 24h window error
-        if (sendError.includes('131047') || sendError.includes('outside')) {
-          console.warn(`💡 HINT: This number may not have messaged in 24h. Use template_name instead of message.`);
-          sendError += ' — Use template_name for first-contact (new numbers).';
-        }
+      }
+    } catch (err) {
+      const metaErr = err.response?.data?.error;
+      sendError = metaErr
+        ? `Meta error ${metaErr.code}: ${metaErr.message}`
+        : (err.message || 'Meta API error');
+      console.error(`❌ SEND FAILED (${sentVia}) to ${normalizedPhone}:`, sendError);
+      if (!useTemplate && (sendError.includes('131047') || sendError.includes('outside'))) {
+        console.warn(`💡 HINT: This number may not have messaged in 24h. Use template_name instead of message.`);
+        sendError += ' — Use template_name for first-contact (new numbers).';
       }
     }
 
     if (metaSuccess) {
       await db.saveMessage({ phone: normalizedPhone, role: 'assistant', message: sentContent });
-      // Create/update lead record so this contact appears in dashboard
-      await db.upsertLead({ phone: normalizedPhone, name: (template_params?.[0]) || 'Unknown', score: 3, label: 'COLD', intent: 'general' }).catch(()=>{});
+      if (existingLead === undefined) {
+        existingLead = await db.getLeadByPhone(normalizedPhone).catch(() => null);
+      }
+      if (!existingLead) {
+        await db.upsertLead({
+          phone: normalizedPhone,
+          name: resolvedTemplateParams?.[0] || 'Unknown',
+          score: 3,
+          label: 'COLD',
+          intent: 'general'
+        }).catch(() => {});
+      }
+      console.log(`💾 ${sentVia[0].toUpperCase()}${sentVia.slice(1)} saved to database for ${normalizedPhone}`);
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // Sync back to CRM timeline ALWAYS (fire-and-forget)
+    // Even if Meta fails, CRM needs to know we received + processed the request
+    // ──────────────────────────────────────────────────────────────
+    if (isCrmTrigger) {
+      syncTimeline({
+        phone: normalizedPhone,
+        direction: 'outbound',
+        message: sentContent || message,
+        call_id,
+        template
+      }).catch(() => {});
+      console.log(`✨ CRM Trigger synced to timeline for ${phone}`);
     }
 
     if (sendError) {
       return res.status(200).json({ success: false, error: sendError });
     }
 
-    if (isCrmTrigger) console.log(`✨ CRM Trigger completed successfully for ${phone}\n`);
     res.json({ success: true });
   } catch (e) {
     console.error('💥 SEND Unexpected error:', e.message);
