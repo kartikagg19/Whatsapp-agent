@@ -2,7 +2,7 @@
 //  src/whatsapp.js — Send & Receive WhatsApp Messages
 // ================================================================
 const axios  = require('axios');
-const API    = 'https://graph.facebook.com/v20.0';
+const API    = 'https://graph.facebook.com/v22.0';
 const PHONE  = () => process.env.WHATSAPP_PHONE_NUMBER_ID;
 const TOKEN  = () => process.env.WHATSAPP_TOKEN;
 const HEADER = () => ({ Authorization: `Bearer ${TOKEN()}`, 'Content-Type': 'application/json' });
@@ -45,6 +45,24 @@ async function markRead(messageId) {
       messaging_product: 'whatsapp', status: 'read', message_id: messageId
     }, { headers: HEADER() });
   } catch { /* non-critical */ }
+}
+
+// Mark as read AND show the typing indicator. Bubble shows for up to
+// 25s OR until the next outbound message — whichever comes first.
+// Falls back silently to a plain read-receipt if the API rejects the
+// typing field (older WABA tier, etc).
+async function markReadWithTyping(messageId) {
+  try {
+    await axios.post(`${API}/${PHONE()}/messages`, {
+      messaging_product: 'whatsapp',
+      status: 'read',
+      message_id: messageId,
+      typing_indicator: { type: 'text' }
+    }, { headers: HEADER() });
+  } catch {
+    // Typing not supported — fall back to plain read receipt.
+    markRead(messageId).catch(() => {});
+  }
 }
 
 // Alert sales team about HOT lead
@@ -121,4 +139,4 @@ async function sendTemplate(to, templateName, languageCode = 'en', params = []) 
   }
 }
 
-module.exports = { sendText, sendDocument, sendButtons, markRead, alertSales, parseMessage, sendTemplate };
+module.exports = { sendText, sendDocument, sendButtons, markRead, markReadWithTyping, alertSales, parseMessage, sendTemplate };

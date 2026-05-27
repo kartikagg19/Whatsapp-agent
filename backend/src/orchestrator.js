@@ -169,7 +169,11 @@ function enqueueInbound({ phone, name, text, messageId }) {
 
 async function runPipeline(phone, buf) {
   const T = tunables();
-  const mergedText = buf.messages.map(m => m.text).join(' ').trim();
+  // Join with newlines so the AI sees each rapid message on its own
+  // line — preserves "these were separate thoughts" signal. Space-join
+  // collapsed short fragments like "3bhk vista" + "price" + "2bhk pie"
+  // into ambiguous run-on text that Gemini misread.
+  const mergedText = buf.messages.map(m => m.text).join('\n').trim();
   const lastMessageId = buf.latestMessageId || buf.messages[buf.messages.length - 1]?.messageId;
   const name = buf.name || 'Unknown';
 
