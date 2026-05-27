@@ -262,7 +262,6 @@ router.post('/send', async (req, res) => {
     const crmSecret = process.env.CRM_WEBHOOK_SECRET || '';
     const isCrmTrigger = !!headerSecret;
     const timestamp = new Date().toISOString();
-    const useTemplate = !!(template_name && template_name.trim());
 
     // Log incoming request
     console.log(`\n📨 ╔═══════════════════════════════════════════`);
@@ -270,7 +269,6 @@ router.post('/send', async (req, res) => {
     console.log(`   ║ Time: ${timestamp}`);
     console.log(`   ║ Phone: ${phone}`);
     console.log(`   ║ Call ID: ${call_id || 'none'}`);
-    console.log(`   ║ Mode: ${useTemplate ? `TEMPLATE (${template_name})` : 'FREE-FORM'}`);
     console.log(`   ╚═══════════════════════════════════════════\n`);
 
     // Validate auth
@@ -282,7 +280,7 @@ router.post('/send', async (req, res) => {
     if (!phone) {
       return res.status(400).json({ error: 'phone is required' });
     }
-    if (!useTemplate && !message) {
+    if (!template_name && !message) {
       return res.status(400).json({ error: 'Either message (free-form) or template_name (new contact) is required' });
     }
 
