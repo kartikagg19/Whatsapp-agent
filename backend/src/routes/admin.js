@@ -71,7 +71,11 @@ const DEFAULT_SETTINGS = {
   followup_hot_hours:   24,
   followup_warm_hours:  48,
   followup_cold_hours:  72,
-  followup_check_hours: 6
+  followup_check_hours: 6,
+  // Default template for first-contact (new numbers from CRM)
+  default_template_name:     '',   // e.g. "dreamhome_intro"
+  default_template_language: 'en', // "en", "en_US", "hi"
+  default_template_params:   ''    // comma-separated, e.g. "Niharika,Krishna Group"
 };
 
 function loadSettings() {
@@ -294,6 +298,32 @@ router.post('/send', async (req, res) => {
       return res.status(200).json({ success: true, deduped: true });
     }
 
+    // ── AUTO-TEMPLATE: if no template given, check if this is a new number ──
+    // If it is, auto-use the default_template_name from settings
+    let resolvedTemplateName = template_name?.trim() || '';
+    let resolvedTemplateParams = Array.isArray(template_params)
+      ? template_params
+      : (template_params ? [template_params] : []);
+    let resolvedTemplateLang = template_language || 'en';
+
+    if (!resolvedTemplateName) {
+      const existingLead = await db.getLeadByPhone(normalizedPhone).catch(() => null);
+      const isNewContact = !existingLead || !existingLead.message_count || existingLead.message_count === 0;
+      if (isNewContact) {
+        const s = loadSettings();
+        if (s.default_template_name && s.default_template_name.trim()) {
+          resolvedTemplateName = s.default_template_name.trim();
+          resolvedTemplateLang = s.default_template_language || 'en';
+          // Parse comma-separated default params, substitute {name} placeholder
+          const rawParams = (s.default_template_params || '').split(',').map(p => p.trim()).filter(Boolean);
+          resolvedTemplateParams = rawParams.length ? rawParams : resolvedTemplateParams;
+          console.log(`🔄 AUTO-TEMPLATE: new contact detected → using default template "${resolvedTemplateName}"`);
+        }
+      }
+    }
+
+    const useTemplate = !!resolvedTemplateName;
+
     // ── SEND ──────────────────────────────────────────────────────
     let sendError = null;
     let metaSuccess = false;
@@ -301,13 +331,11 @@ router.post('/send', async (req, res) => {
 
     if (useTemplate) {
       // Template message — works for NEW numbers (first contact)
-      const params  = Array.isArray(template_params) ? template_params : (template_params ? [template_params] : []);
-      const lang    = template_language || 'en';
       try {
-        await sendTemplate(normalizedPhone, template_name.trim(), lang, params);
+        await sendTemplate(normalizedPhone, resolvedTemplateName, resolvedTemplateLang, resolvedTemplateParams);
         metaSuccess = true;
-        sentContent = `[TEMPLATE:${template_name}] ${params.join(', ')}`;
-        console.log(`✅ Template "${template_name}" sent to ${normalizedPhone}`);
+        sentContent = `[TEMPLATE:${resolvedTemplateName}] ${resolvedTemplateParams.join(', ')}`;
+        console.log(`✅ Template "${resolvedTemplateName}" sent to ${normalizedPhone}`);
       } catch (err) {
         const metaErr = err.response?.data?.error;
         sendError = metaErr
