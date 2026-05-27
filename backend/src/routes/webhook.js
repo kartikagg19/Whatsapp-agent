@@ -15,7 +15,7 @@
 // ================================================================
 const express = require('express');
 const router  = express.Router();
-const { sendText, markRead, parseMessage } = require('../whatsapp');
+const { sendText, markRead, markReadWithTyping, parseMessage } = require('../whatsapp');
 const { syncTimeline } = require('../crmClient');
 const { enqueueInbound } = require('../orchestrator');
 const db = require('../database');
@@ -56,8 +56,10 @@ router.post('/', async (req, res) => {
     return sendText(phone, "Welcome back! 😊 How can I help you find your dream home today?").catch(() => {});
   }
 
-  // Mark read immediately — must not be debounced or the user sees no blue ticks.
-  markRead(messageId).catch(e => console.warn('⚠️ markRead failed:', e.message));
+  // Mark read + show typing indicator immediately. Bubble naturally
+  // clears when our reply lands (or after 25s — Meta's auto-dismiss).
+  // Must not be debounced or the user sees no blue ticks / no typing.
+  markReadWithTyping(messageId).catch(e => console.warn('⚠️ markReadWithTyping failed:', e.message));
 
   // Persist the inbound message immediately so dashboard + CRM stay live
   // even if the AI reply ends up debounced/aborted later.
