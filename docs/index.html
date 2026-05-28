@@ -702,8 +702,10 @@ const LeadsPage = ({leads,loading,onSelect,apiBase,isDemo}) => {
         ),
         h('button',{className:'btn btn-ghost btn-sm',onClick:exportLeadsOnly,disabled:leads.length===0,title:'Download leads summary (no chat history)'},
           h('i',{className:'ti ti-table-export'}),' Export Leads'),
-        h('button',{className:'btn btn-primary btn-sm',onClick:exportWithChats,disabled:exporting||leads.length===0,title:'Download leads + full conversation history'},
-          exporting?h(Spinner):h('i',{className:'ti ti-message-report'}),' ',exporting?'Exporting...':'Export with Chats')
+        h('button',{className:'btn btn-primary btn-sm',onClick:exportWithChats,disabled:leads.length===0,title:'Download leads + full conversation history (1 row per person)'},
+          h('i',{className:'ti ti-message-report'}),' Export with Chats'),
+        !isDemo&&apiBase&&apiBase!=='DEMO'?h('a',{href:apiBase+'/export/csv',target:'_blank',className:'btn btn-sm',style:{background:'#16a34a',color:'#fff',textDecoration:'none'},title:'Direct download - always works'},
+          h('i',{className:'ti ti-download'}),' Direct Download'):null
       )
     ),
     loading?h('div',{className:'empty',style:{padding:'56px'}},h(Spinner)):
