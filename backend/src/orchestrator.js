@@ -31,6 +31,7 @@ const { getAIReply, getLeadLabel } = require('./ai');
 const { sendText, sendDocument, sendButtons, alertSales } = require('./whatsapp');
 const { syncTimeline } = require('./crmClient');
 const { splitReply } = require('./chunker');
+const { analyzeExchange } = require('./analyzer');
 const db = require('./database');
 
 const SETTINGS_FILE = path.join(__dirname, '../../settings.json');
@@ -310,6 +311,14 @@ async function runPipeline(phone, buf) {
       ai_score: (typeof ai.lead_score === 'number' && isFinite(ai.lead_score)) ? Math.round(ai.lead_score * 10) : null,
       intent: ai.qualification_stage, qualified: !!ai.qualified, summary: ai.summary,
       profile_patch: { budget_range: ai.budget_range }
+    }).catch(() => {});
+
+    // ── Campaign Intelligence — fire-and-forget Layer 1 analysis ────
+    // Never throws (analyzer swallows internally). Never delays user reply.
+    analyzeExchange({
+      phone,
+      userMessage: mergedText,
+      botMessage:  ai.reply_message
     }).catch(() => {});
 
   } finally {

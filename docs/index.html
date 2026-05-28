@@ -1470,6 +1470,264 @@ const CostsPage = ({apiBase,isDemo}) => {
   );
 };
 
+/* ─── CAMPAIGN INTELLIGENCE PAGE ─────────────────────────────── */
+const CampaignIntelPage = ({apiBase,isDemo,showToast}) => {
+  const [tab,setTab] = useState('overview');
+  const [overview,setOverview] = useState(null);
+  const [funnel,setFunnel] = useState([]);
+  const [issues,setIssues] = useState([]);
+  const [hallu,setHallu] = useState([]);
+  const [obj,setObj] = useState({breakdown:[],samples:[]});
+  const [queue,setQueue] = useState([]);
+  const [showReviewed,setShowReviewed] = useState(false);
+  const [loading,setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    if (isDemo) { setLoading(false); return; }
+    setLoading(true);
+    try {
+      const [ovR,fnR,isR,haR,obR,qR] = await Promise.all([
+        apiFetch(`${apiBase}/analytics/overview`),
+        apiFetch(`${apiBase}/analytics/funnel`),
+        apiFetch(`${apiBase}/analytics/issues`),
+        apiFetch(`${apiBase}/analytics/hallucinations`),
+        apiFetch(`${apiBase}/analytics/objections`),
+        apiFetch(`${apiBase}/analytics/queue?reviewed=${showReviewed?'1':'0'}`)
+      ]);
+      const [ov,fn,is,ha,ob,q] = await Promise.all([ovR.json(),fnR.json(),isR.json(),haR.json(),obR.json(),qR.json()]);
+      setOverview(ov.last7 || null);
+      setFunnel(fn.funnel || []);
+      setIssues(is.issues || []);
+      setHallu(ha.items || []);
+      setObj({breakdown:ob.breakdown||[],samples:ob.samples||[]});
+      setQueue(q.items || []);
+    } catch(e) { console.warn('analytics fetch failed:', e.message); }
+    setLoading(false);
+  },[apiBase,isDemo,showReviewed]);
+
+  useEffect(()=>{refresh();},[refresh]);
+
+  async function submitVerdict(id, verdict) {
+    try {
+      const r = await apiFetch(`${apiBase}/analytics/queue/${id}/verdict`, {
+        method: 'POST',
+        body: JSON.stringify({ verdict })
+      });
+      const d = await r.json();
+      if (d.success) {
+        showToast && showToast('Verdict recorded','success');
+        setQueue(q => q.filter(x => x.id !== id));
+      } else {
+        showToast && showToast(d.error || 'Failed','err');
+      }
+    } catch(e) { showToast && showToast(e.message,'err'); }
+  }
+
+  if (isDemo) return h('div',{className:'empty'},
+    h('i',{className:'ti ti-chart-pie',style:{fontSize:'32px',color:'var(--text3)'}}),
+    h('p',null,'Connect backend to view Campaign Intelligence')
+  );
+  if (loading && !overview) return h('div',{className:'empty'},h(Spinner));
+
+  const TABS = [
+    {k:'overview',    l:'Overview',       icon:'ti-layout-dashboard'},
+    {k:'funnel',      l:'Sales Funnel',   icon:'ti-filter'},
+    {k:'issues',      l:'Issues',         icon:'ti-alert-triangle'},
+    {k:'hallu',       l:'Hallucinations', icon:'ti-bug'},
+    {k:'objections',  l:'Objections',     icon:'ti-message-2'},
+    {k:'queue',       l:'Review Queue',   icon:'ti-checks'}
+  ];
+
+  const tabBar = h('div',{className:'stab-bar'},
+    TABS.map(t => h('button',{key:t.k,className:`stab ${tab===t.k?'active':''}`,onClick:()=>setTab(t.k)},
+      h('i',{className:'ti '+t.icon}),t.l))
+  );
+
+  const overviewPanel = h('div',null,
+    !overview || overview.total_exchanges === 0
+      ? h('div',{className:'empty'},
+          h('i',{className:'ti ti-database-off',style:{fontSize:'32px',color:'var(--text3)'}}),
+          h('p',null,'No analysis data yet'),
+          h('p',{style:{fontSize:'12px',color:'var(--text3)'}},'Data appears after bot conversations. If you see this after live traffic, run backend/sql/conversation_analysis.sql in Supabase.')
+        )
+      : h('div',null,
+          h('div',{className:'stats-row',style:{gridTemplateColumns:'repeat(4,1fr)',gap:'12px'}},
+            metricCard('Total Exchanges', overview.total_exchanges, 'last 7 days'),
+            metricCard('Avg Quality', overview.avg_quality != null ? overview.avg_quality + '/10' : '—', 'evaluated only'),
+            metricCard('Hallucinations', overview.hallucinations, 'act immediately', overview.hallucinations > 0 ? 'red' : null),
+            metricCard('Handle Rate', overview.handle_rate_pct != null ? overview.handle_rate_pct + '%' : '—', 'bot moved convo forward', overview.handle_rate_pct != null && overview.handle_rate_pct < 70 ? 'amber' : null),
+          ),
+          h('div',{className:'stats-row',style:{gridTemplateColumns:'repeat(4,1fr)',gap:'12px',marginTop:'12px'}},
+            metricCard('Hostile Customers', overview.hostile_count, 'review same day', overview.hostile_count > 0 ? 'amber' : null),
+            metricCard('At Closing', overview.at_closing_count, 'ready to commit'),
+            metricCard('Dead Conversations', overview.dead_count, 'no path forward', overview.dead_count > 20 ? 'amber' : null),
+            metricCard('No CTA Flags', overview.no_cta_count, 'bot went passive', overview.no_cta_count > overview.total_exchanges * 0.1 ? 'amber' : null),
+          )
+        )
+  );
+
+  const funnelPanel = funnel.length === 0
+    ? h('div',{className:'empty'},h('p',null,'Funnel data builds up after LLM evaluation completes (every 5 min)'))
+    : h('div',{className:'card'},
+        h('div',{className:'card-hd'},h('span',{className:'card-title'},'Sales Funnel — Unique Customers (7d)')),
+        h('div',{className:'card-bd'},
+          (() => {
+            const max = Math.max(...funnel.map(s => +s.unique_customers || 0), 1);
+            return funnel.map(s => h('div',{key:s.sales_stage,style:{marginBottom:'10px'}},
+              h('div',{style:{display:'flex',justifyContent:'space-between',fontSize:'12px',marginBottom:'4px'}},
+                h('span',{style:{textTransform:'capitalize',fontWeight:600}}, s.sales_stage),
+                h('span',{style:{color:'var(--text3)',fontFamily:'var(--mono)'}}, `${s.unique_customers} • avg ${s.avg_quality ? (+s.avg_quality).toFixed(1) : '—'}/10`)
+              ),
+              h('div',{style:{height:'10px',background:'var(--surface2)',borderRadius:'6px',overflow:'hidden'}},
+                h('div',{style:{height:'100%',width:`${(+s.unique_customers / max) * 100}%`,background:'var(--brand)',transition:'width .3s'}})
+              )
+            ));
+          })()
+        )
+      );
+
+  const issuesPanel = issues.length === 0
+    ? h('div',{className:'empty'},h('p',null,'No issues flagged yet — either no traffic or things are looking clean'))
+    : h('div',{className:'card'},
+        h('div',{className:'card-hd'},h('span',{className:'card-title'},'Issue Frequency — Last 7 Days')),
+        h('div',{className:'card-bd'},
+          h('div',{style:{fontSize:'11px',color:'var(--text3)',marginBottom:'12px',fontFamily:'var(--mono)'}},
+            'red ≥ 10% — fix this week  ·  amber 5-10% — monitor  ·  green < 5% — noise'),
+          issues.map(i => h('div',{key:i.issue,style:{marginBottom:'10px'}},
+            h('div',{style:{display:'flex',justifyContent:'space-between',fontSize:'12px',marginBottom:'4px'}},
+              h('span',{style:{fontWeight:600,fontFamily:'var(--mono)'}}, i.issue),
+              h('span',{style:{color: i.severity === 'red' ? 'var(--hot)' : i.severity === 'amber' ? '#D97706' : 'var(--text3)', fontFamily:'var(--mono)'}},
+                `${i.occurrences} (${i.pct_of_exchanges || 0}%)`)
+            ),
+            h('div',{style:{height:'8px',background:'var(--surface2)',borderRadius:'4px',overflow:'hidden'}},
+              h('div',{style:{height:'100%',width:`${Math.min(+i.pct_of_exchanges||0,100)}%`,background:i.severity==='red'?'var(--hot)':i.severity==='amber'?'#F59E0B':'var(--text3)'}})
+            )
+          ))
+        )
+      );
+
+  const halluPanel = hallu.length === 0
+    ? h('div',{className:'empty'},
+        h('i',{className:'ti ti-check',style:{fontSize:'32px',color:'var(--green)'}}),
+        h('p',null,'No hallucinations detected'))
+    : h('div',null,
+        h('div',{style:{fontSize:'12px',color:'var(--text3)',marginBottom:'10px',fontFamily:'var(--mono)'}},
+          `${hallu.length} flagged claim(s) — each shows what bot said + ground-truth comparison`),
+        hallu.map(item => h('div',{key:item.id,className:'card',style:{marginBottom:'10px'}},
+          h('div',{className:'card-bd'},
+            h('div',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)',marginBottom:'6px'}},
+              new Date(item.created_at).toLocaleString(),' · ',item.phone),
+            item.user_message && h('div',{style:{fontSize:'12px',padding:'8px 10px',background:'var(--surface2)',borderRadius:'6px',marginBottom:'6px'}},
+              h('span',{style:{color:'var(--text3)',fontWeight:600,marginRight:'6px'}},'User:'),item.user_message),
+            h('div',{style:{fontSize:'12px',padding:'8px 10px',background:'var(--surface2)',borderRadius:'6px',marginBottom:'6px',borderLeft:'3px solid var(--hot)'}},
+              h('span',{style:{color:'var(--hot)',fontWeight:600,marginRight:'6px'}},'Bot:'),item.bot_message),
+            item.hallucination_detail && item.hallucination_detail.items &&
+              h('div',{style:{fontSize:'12px',padding:'8px 10px',background:'#FEF3C7',borderRadius:'6px',color:'#92400E'}},
+                h('strong',null,'Flagged claims: '),
+                (item.hallucination_detail.items || []).map((it,i) =>
+                  h('span',{key:i,style:{marginRight:'8px'}},`${it.kind}: "${it.claim}"`)
+                )
+              )
+          )
+        ))
+      );
+
+  const objPanel = obj.breakdown.length === 0
+    ? h('div',{className:'empty'},h('p',null,'No objection data yet — appears after LLM evaluations'))
+    : h('div',null,
+        h('div',{className:'card'},
+          h('div',{className:'card-hd'},h('span',{className:'card-title'},'Objection Breakdown — Last 7 Days')),
+          h('div',{className:'card-bd'},
+            h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:'13px'}},
+              h('thead',null,h('tr',null,
+                ['Type','Count','Handle Rate','Avg Quality'].map(c =>
+                  h('th',{key:c,style:{padding:'8px 12px',textAlign:'left',borderBottom:'1px solid var(--border)',color:'var(--text3)',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600,textTransform:'uppercase'}},c))
+              )),
+              h('tbody',null,
+                obj.breakdown.map(b => h('tr',{key:b.objection_type},
+                  h('td',{style:{padding:'10px 12px',textTransform:'capitalize',fontWeight:600}},b.objection_type),
+                  h('td',{style:{padding:'10px 12px',fontFamily:'var(--mono)'}},b.occurrences),
+                  h('td',{style:{padding:'10px 12px',fontFamily:'var(--mono)',color: +b.handle_rate_pct < 50 ? 'var(--hot)' : +b.handle_rate_pct < 70 ? '#D97706' : 'var(--green)'}},`${b.handle_rate_pct || 0}%`),
+                  h('td',{style:{padding:'10px 12px',fontFamily:'var(--mono)',color:'var(--text2)'}},b.avg_quality ? (+b.avg_quality).toFixed(1) : '—')
+                ))
+              )
+            )
+          )
+        ),
+        obj.samples.length > 0 && h('div',{className:'card',style:{marginTop:'12px'}},
+          h('div',{className:'card-hd'},h('span',{className:'card-title'},'Recent Objection Exchanges (sample)')),
+          h('div',{className:'card-bd'},
+            obj.samples.slice(0,10).map(s => h('div',{key:s.id,style:{padding:'10px',background:'var(--surface2)',borderRadius:'6px',marginBottom:'8px',fontSize:'12px'}},
+              h('div',{style:{display:'flex',justifyContent:'space-between',fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)',marginBottom:'6px'}},
+                h('span',null,s.objection_type,' · ',new Date(s.created_at).toLocaleString()),
+                h('span',{style:{color: s.handled ? 'var(--green)' : 'var(--hot)'}}, s.handled ? '✓ handled' : '✗ failed')
+              ),
+              h('div',{style:{marginBottom:'4px'}},h('strong',null,'User: '),s.user_message),
+              h('div',null,h('strong',null,'Bot: '),s.bot_message)
+            ))
+          )
+        )
+      );
+
+  const queuePanel = h('div',null,
+    h('div',{style:{display:'flex',gap:'8px',marginBottom:'12px',alignItems:'center'}},
+      h('button',{className:`btn btn-sm ${!showReviewed?'btn-primary':'btn-ghost'}`,onClick:()=>setShowReviewed(false)},'Needs Review'),
+      h('button',{className:`btn btn-sm ${showReviewed?'btn-primary':'btn-ghost'}`,onClick:()=>setShowReviewed(true)},'Already Reviewed'),
+      h('button',{className:'btn btn-sm btn-ghost',onClick:refresh,style:{marginLeft:'auto'}},h('i',{className:'ti ti-refresh'}),'Refresh')
+    ),
+    queue.length === 0
+      ? h('div',{className:'empty'},h('p',null, showReviewed ? 'Nothing reviewed yet' : 'Queue is empty — nothing to review 🎉'))
+      : queue.map(item => h('div',{key:item.id,className:'card',style:{marginBottom:'10px'}},
+          h('div',{className:'card-bd'},
+            h('div',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)',marginBottom:'6px',display:'flex',justifyContent:'space-between'}},
+              h('span',null, new Date(item.created_at).toLocaleString(),' · ',item.phone),
+              h('span',null,
+                (item.rule_flags||[]).map(f => h('span',{key:f,style:{marginRight:'6px',padding:'2px 6px',background:'#FEE2E2',color:'#991B1B',borderRadius:'4px'}}, f)),
+                item.response_quality_score != null && h('span',{style:{padding:'2px 6px',background:'var(--surface2)',borderRadius:'4px'}},`Q ${item.response_quality_score}/10`),
+                item.sentiment === 'hostile' && h('span',{style:{padding:'2px 6px',background:'#FEE2E2',color:'#991B1B',borderRadius:'4px',marginLeft:'6px'}},'hostile')
+              )
+            ),
+            item.user_message && h('div',{style:{fontSize:'12px',padding:'8px 10px',background:'var(--surface2)',borderRadius:'6px',marginBottom:'6px'}},
+              h('strong',null,'User: '), item.user_message),
+            h('div',{style:{fontSize:'12px',padding:'8px 10px',background:'var(--surface2)',borderRadius:'6px',marginBottom:'6px',borderLeft:'3px solid var(--brand)'}},
+              h('strong',null,'Bot: '), item.bot_message),
+            item.improvement_suggestion && h('div',{style:{fontSize:'12px',padding:'8px 10px',background:'#FEF3C7',color:'#92400E',borderRadius:'6px',marginBottom:'6px'}},
+              h('strong',null,'Suggestion: '), item.improvement_suggestion),
+            !item.human_reviewed
+              ? h('div',{style:{display:'flex',gap:'6px',marginTop:'8px'}},
+                  h('button',{className:'btn btn-sm',style:{background:'#FEE2E2',color:'#991B1B'},onClick:()=>submitVerdict(item.id,'confirmed_bad')},'Confirmed Bad'),
+                  h('button',{className:'btn btn-sm btn-ghost',onClick:()=>submitVerdict(item.id,'false_alarm')},'False Alarm'),
+                  (item.rule_flags||[]).includes('hallucination') &&
+                    h('button',{className:'btn btn-sm',style:{background:'#FED7AA',color:'#9A3412'},onClick:()=>submitVerdict(item.id,'hallucination_confirmed')},'Hallucination Confirmed')
+                )
+              : h('div',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)',marginTop:'6px'}},
+                  'verdict: ', h('strong',null, item.human_verdict || '—'))
+          )
+        ))
+  );
+
+  return h('div',null,
+    tabBar,
+    h('div',{style:{marginTop:'14px'}},
+      tab === 'overview'   ? overviewPanel :
+      tab === 'funnel'     ? funnelPanel   :
+      tab === 'issues'     ? issuesPanel   :
+      tab === 'hallu'      ? halluPanel    :
+      tab === 'objections' ? objPanel      :
+      tab === 'queue'      ? queuePanel    : null
+    )
+  );
+};
+
+function metricCard(label, value, sub, tone) {
+  const color = tone === 'red' ? 'var(--hot)' : tone === 'amber' ? '#D97706' : null;
+  return h('div',{className:'stat'},
+    h('div',{className:'stat-label'},label),
+    h('div',{className:'stat-val',style:color?{color,fontSize:'22px'}:{fontSize:'22px'}}, value),
+    sub && h('div',{className:'stat-meta'}, sub)
+  );
+}
+
 /* ─── APP ROOT ────────────────────────────────────────────────── */
 function App(){
   const savedApi=localStorage.getItem('pa_api');
@@ -1517,6 +1775,7 @@ function App(){
     {key:'leads',         icon:'ti-users',            label:'All Leads',badge:hotCount||null},
     {key:'agent-settings',icon:'ti-robot',            label:'Agent Settings'},
     {key:'costs',         icon:'ti-currency-rupee',   label:'Cost Analytics'},
+    {key:'campaign-intel',icon:'ti-chart-pie',        label:'Campaign Intel'},
   ];
   const META={
     overview:        {title:'Overview',       sub:'Real-time lead pipeline'},
@@ -1524,6 +1783,7 @@ function App(){
     leads:           {title:'All Leads',      sub:`${leads.length} total`},
     'agent-settings':{title:'Agent Settings', sub:'Configure your AI bot'},
     costs:           {title:'Cost Analytics', sub:'Token usage & spend per conversation'},
+    'campaign-intel':{title:'Campaign Intelligence', sub:'Bot performance, issues, and review queue'},
   };
 
   if(!loggedIn) return h(LoginPage,{onLogin:handleLogin});
@@ -1581,7 +1841,8 @@ function App(){
         page==='pipeline'       ?h(PipelinePage,     {leads,loading,onSelect:setSelected}):
         page==='leads'          ?h(LeadsPage,        {leads,loading,onSelect:setSelected,apiBase,isDemo}):
         page==='agent-settings' ?h(AgentSettingsPage,{apiBase,isDemo,showToast}):
-        page==='costs'          ?h(CostsPage,        {apiBase,isDemo}):null
+        page==='costs'          ?h(CostsPage,        {apiBase,isDemo}):
+        page==='campaign-intel' ?h(CampaignIntelPage,{apiBase,isDemo,showToast}):null
       )
     ),
     selected  &&h(LeadModal,          {lead:selected,apiBase,isDemo,onClose:()=>setSelected(null),showToast}),
