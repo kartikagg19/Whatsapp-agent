@@ -503,8 +503,13 @@ router.post('/send', async (req, res) => {
 
     if (!resolvedTemplateName) {
       existingLead = await db.getLeadByPhone(normalizedPhone).catch(() => null);
-      const isNewContact = !existingLead || !existingLead.message_count || existingLead.message_count === 0;
-      if (isNewContact) {
+      // Meta's 24h rule is about whether the USER has messaged US, not
+      // whether we have any row in our leads table. A contact we created
+      // by sending an outbound template still can't receive free-form
+      // until they reply. Check for any inbound (role='user') message.
+      const hasInbound = await db.hasInboundFromPhone(normalizedPhone);
+      const isOutsideFreeFormWindow = !hasInbound;
+      if (isOutsideFreeFormWindow) {
         const s = loadSettings();
         if (s.default_template_name && s.default_template_name.trim()) {
           resolvedTemplateName = s.default_template_name.trim();
@@ -516,9 +521,9 @@ router.post('/send', async (req, res) => {
           } else {
             resolvedTemplateParams = rawParams.length ? rawParams : resolvedTemplateParams;
           }
-          console.log(`🔄 AUTO-TEMPLATE: new contact detected → using default template "${resolvedTemplateName}" with params [${resolvedTemplateParams.join(', ')}]`);
+          console.log(`🔄 AUTO-TEMPLATE: ${existingLead ? 'no inbound from contact yet' : 'new contact'} → using default template "${resolvedTemplateName}" with params [${resolvedTemplateParams.join(', ')}]`);
         } else {
-          console.warn(`⚠️  NEW CONTACT with no template_name and no default_template_name configured — Meta will reject free-form text (24h rule).`);
+          console.warn(`⚠️  No inbound from ${normalizedPhone} and no default_template_name configured — Meta will silently drop free-form text (24h rule).`);
         }
       }
     }
