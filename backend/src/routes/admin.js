@@ -77,16 +77,27 @@ const DEFAULT_SETTINGS = {
   followup_warm_hours:  48,
   followup_cold_hours:  72,
   followup_check_hours: 6,
-  // Default template for first-contact (new numbers from CRM)
-  default_template_name:     '',   // e.g. "dreamhome_intro"
-  default_template_language: 'en', // "en", "en_US", "hi"
-  default_template_params:   ''    // comma-separated, e.g. "Niharika,Krishna Group"
+  // Default template for first-contact (new numbers from CRM).
+  // Env-var overrides take priority — set DEFAULT_TEMPLATE_NAME etc.
+  // as Fly.io secrets to change without code edit + redeploy.
+  default_template_name:     process.env.DEFAULT_TEMPLATE_NAME     || 'krishna_group',
+  default_template_language: process.env.DEFAULT_TEMPLATE_LANGUAGE || 'en',
+  default_template_params:   process.env.DEFAULT_TEMPLATE_PARAMS   || ''
 };
 
 function loadSettings() {
   try {
-    if (fs.existsSync(SETTINGS_FILE))
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) };
+    if (fs.existsSync(SETTINGS_FILE)) {
+      const onDisk = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+      // Strip empty strings from on-disk overrides so they don't blank
+      // out hard-coded / env defaults (e.g. someone hits Save in the
+      // dashboard with default_template_name empty — without this,
+      // we'd lose the krishna_group default).
+      for (const k of Object.keys(onDisk)) {
+        if (onDisk[k] === '' || onDisk[k] === null) delete onDisk[k];
+      }
+      return { ...DEFAULT_SETTINGS, ...onDisk };
+    }
   } catch {}
   return { ...DEFAULT_SETTINGS };
 }
@@ -519,6 +530,39 @@ router.post('/send', async (req, res) => {
       return res.status(400).json({ error: 'phone and (message or template_name) required' });
     }
 
+    // ── SELF-HEALING TEMPLATE METADATA ────────────────────────────
+    // Ask Meta what languages this template is actually approved in and
+    // how many {{N}} placeholders the body has. If we have it wrong,
+    // adjust before the send instead of letting Meta reject. This is
+    // what stops the "configured wrong → silently fails" failure mode.
+    if (useTemplate) {
+      const variants = await getCachedTemplateInfo(resolvedTemplateName);
+      if (variants && variants.length > 0) {
+        // Pick the requested language if approved; else fall back to the first
+        // approved variant (the one Meta picked when you got it approved).
+        const requested = variants.find(v => v.language === resolvedTemplateLang);
+        const chosen = requested || variants[0];
+        if (!requested) {
+          console.log(`🔄 Template "${resolvedTemplateName}" not approved for lang "${resolvedTemplateLang}" — falling back to "${chosen.language}"`);
+          resolvedTemplateLang = chosen.language;
+        }
+        // Right-size params to what the template body actually expects.
+        if (resolvedTemplateParams.length > chosen.paramCount) {
+          console.log(`🔄 Template "${resolvedTemplateName}" expects ${chosen.paramCount} param(s), trimming from ${resolvedTemplateParams.length}`);
+          resolvedTemplateParams = resolvedTemplateParams.slice(0, chosen.paramCount);
+        } else if (resolvedTemplateParams.length < chosen.paramCount) {
+          // Pad missing params with the lead's name (if known) or a safe placeholder.
+          const padValue = crmLeadName || 'there';
+          while (resolvedTemplateParams.length < chosen.paramCount) {
+            resolvedTemplateParams.push(padValue);
+          }
+          console.log(`🔄 Template "${resolvedTemplateName}" expects ${chosen.paramCount} param(s), padded to [${resolvedTemplateParams.join(', ')}]`);
+        }
+      } else {
+        console.warn(`⚠️  Could not look up template "${resolvedTemplateName}" from Meta cache — proceeding with configured lang="${resolvedTemplateLang}" and ${resolvedTemplateParams.length} param(s). If this is the first send after restart and WABA_ID is unset, the template cache will be empty.`);
+      }
+    }
+
     const msgPrefix = call_id ? `[CRM ${call_id}]` : '[MANUAL]';
     const templateParamText = resolvedTemplateParams.join(', ');
     const templateSummary = `${msgPrefix} [TEMPLATE:${resolvedTemplateName}] ${templateParamText}`.trim();
@@ -681,17 +725,70 @@ router.post('/broadcast-template', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// In-memory cache of approved templates from Meta. Keyed by template
+// name → { language, paramCount }. Used by /api/send to self-heal when
+// the configured language or param count doesn't match what Meta expects.
+let templateCache = null;
+let templateCacheLoadedAt = 0;
+const TEMPLATE_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+async function fetchApprovedTemplates() {
+  const axios = require('axios');
+  const wabaId = process.env.WABA_ID || '';
+  if (!wabaId) return [];
+  const r = await axios.get(`https://graph.facebook.com/v20.0/${wabaId}/message_templates`, {
+    headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` },
+    params: { fields: 'name,status,language,components', limit: 100 }
+  });
+  return (r.data.data || []).filter(t => t.status === 'APPROVED');
+}
+
+// Count {{N}} placeholders in a template's BODY component.
+// Header/footer/buttons aren't counted (the /api/send code only fills BODY).
+function countTemplateParams(template) {
+  const body = (template.components || []).find(c => c.type === 'BODY');
+  if (!body || !body.text) return 0;
+  const matches = body.text.match(/\{\{\s*\d+\s*\}\}/g);
+  return matches ? matches.length : 0;
+}
+
+async function getCachedTemplateInfo(templateName) {
+  const now = Date.now();
+  if (!templateCache || (now - templateCacheLoadedAt) > TEMPLATE_CACHE_TTL_MS) {
+    try {
+      const approved = await fetchApprovedTemplates();
+      templateCache = new Map();
+      for (const t of approved) {
+        // A template name can have multiple language variants. Keep all of
+        // them so /api/send can pick whichever language is asked for, with
+        // any-language-as-fallback if the requested one isn't approved.
+        if (!templateCache.has(t.name)) templateCache.set(t.name, []);
+        templateCache.get(t.name).push({
+          language: t.language,
+          paramCount: countTemplateParams(t)
+        });
+      }
+      templateCacheLoadedAt = now;
+      console.log(`📋 Template cache refreshed: ${templateCache.size} unique names`);
+    } catch (e) {
+      console.warn(`⚠️  Template cache refresh failed: ${e.message}`);
+      return null;
+    }
+  }
+  const variants = templateCache.get(templateName);
+  if (!variants || variants.length === 0) return null;
+  return variants;
+}
+
+// Force a refresh (used by an admin endpoint if needed).
+function invalidateTemplateCache() { templateCache = null; templateCacheLoadedAt = 0; }
+
 // GET /api/templates — list approved WhatsApp templates from Meta
 router.get('/templates', async (req, res) => {
   try {
-    const axios = require('axios');
     const wabaId = process.env.WABA_ID || '';
     if (!wabaId) return res.json({ success: true, data: [] });
-    const r = await axios.get(`https://graph.facebook.com/v20.0/${wabaId}/message_templates`, {
-      headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` },
-      params: { fields: 'name,status,language,components', limit: 50 }
-    });
-    const approved = (r.data.data || []).filter(t => t.status === 'APPROVED');
+    const approved = await fetchApprovedTemplates();
     res.json({ success: true, data: approved });
   } catch (e) {
     res.json({ success: true, data: [] }); // non-fatal
