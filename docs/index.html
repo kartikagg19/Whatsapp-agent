@@ -1479,6 +1479,8 @@ const CampaignIntelPage = ({apiBase,isDemo,showToast}) => {
   const [hallu,setHallu] = useState([]);
   const [obj,setObj] = useState({breakdown:[],samples:[]});
   const [queue,setQueue] = useState([]);
+  const [patterns,setPatterns] = useState({bot:[],user:[]});
+  const [behavior,setBehavior] = useState({intents:[],signals:[],concerns:[],missed:null});
   const [showReviewed,setShowReviewed] = useState(false);
   const [loading,setLoading] = useState(true);
 
@@ -1486,21 +1488,25 @@ const CampaignIntelPage = ({apiBase,isDemo,showToast}) => {
     if (isDemo) { setLoading(false); return; }
     setLoading(true);
     try {
-      const [ovR,fnR,isR,haR,obR,qR] = await Promise.all([
+      const [ovR,fnR,isR,haR,obR,qR,paR,beR] = await Promise.all([
         apiFetch(`${apiBase}/analytics/overview`),
         apiFetch(`${apiBase}/analytics/funnel`),
         apiFetch(`${apiBase}/analytics/issues`),
         apiFetch(`${apiBase}/analytics/hallucinations`),
         apiFetch(`${apiBase}/analytics/objections`),
-        apiFetch(`${apiBase}/analytics/queue?reviewed=${showReviewed?'1':'0'}`)
+        apiFetch(`${apiBase}/analytics/queue?reviewed=${showReviewed?'1':'0'}`),
+        apiFetch(`${apiBase}/analytics/patterns`),
+        apiFetch(`${apiBase}/analytics/customer-behavior`)
       ]);
-      const [ov,fn,is,ha,ob,q] = await Promise.all([ovR.json(),fnR.json(),isR.json(),haR.json(),obR.json(),qR.json()]);
+      const [ov,fn,is,ha,ob,q,pa,be] = await Promise.all([ovR.json(),fnR.json(),isR.json(),haR.json(),obR.json(),qR.json(),paR.json(),beR.json()]);
       setOverview(ov.last7 || null);
       setFunnel(fn.funnel || []);
       setIssues(is.issues || []);
       setHallu(ha.items || []);
       setObj({breakdown:ob.breakdown||[],samples:ob.samples||[]});
       setQueue(q.items || []);
+      setPatterns({bot:pa.bot||[],user:pa.user||[]});
+      setBehavior({intents:be.intents||[],signals:be.signals||[],concerns:be.concerns||[],missed:be.missed||null});
     } catch(e) { console.warn('analytics fetch failed:', e.message); }
     setLoading(false);
   },[apiBase,isDemo,showReviewed]);
@@ -1530,12 +1536,14 @@ const CampaignIntelPage = ({apiBase,isDemo,showToast}) => {
   if (loading && !overview) return h('div',{className:'empty'},h(Spinner));
 
   const TABS = [
-    {k:'overview',    l:'Overview',       icon:'ti-layout-dashboard'},
-    {k:'funnel',      l:'Sales Funnel',   icon:'ti-filter'},
-    {k:'issues',      l:'Issues',         icon:'ti-alert-triangle'},
-    {k:'hallu',       l:'Hallucinations', icon:'ti-bug'},
-    {k:'objections',  l:'Objections',     icon:'ti-message-2'},
-    {k:'queue',       l:'Review Queue',   icon:'ti-checks'}
+    {k:'overview',    l:'Overview',         icon:'ti-layout-dashboard'},
+    {k:'funnel',      l:'Sales Funnel',     icon:'ti-filter'},
+    {k:'issues',      l:'Issues',           icon:'ti-alert-triangle'},
+    {k:'patterns',    l:'Recurring Patterns', icon:'ti-repeat'},
+    {k:'behavior',    l:'Customer Behavior', icon:'ti-user-search'},
+    {k:'hallu',       l:'Hallucinations',   icon:'ti-bug'},
+    {k:'objections',  l:'Objections',       icon:'ti-message-2'},
+    {k:'queue',       l:'Review Queue',     icon:'ti-checks'}
   ];
 
   const tabBar = h('div',{className:'stab-bar'},
@@ -1669,6 +1677,78 @@ const CampaignIntelPage = ({apiBase,isDemo,showToast}) => {
         )
       );
 
+  // ── Recurring Patterns panel ──
+  const patternsTable = (rows, kind) => rows.length === 0
+    ? h('div',{className:'empty',style:{padding:'24px'}},h('p',null, `No ${kind} patterns yet — need more conversations`))
+    : h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:'13px'}},
+        h('thead',null,h('tr',null,
+          ['Phrase (first ~6 words)','Count','% of total', kind==='bot'?'no_cta':'Handle Rate', kind==='bot'?'too_long':'Avg Quality'].map(c =>
+            h('th',{key:c,style:{padding:'8px 12px',textAlign:'left',borderBottom:'1px solid var(--border)',color:'var(--text3)',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600,textTransform:'uppercase'}},c))
+        )),
+        h('tbody',null,
+          rows.map(r => h('tr',{key:r.bot_phrase||r.user_phrase,style:{borderBottom:'1px solid var(--border)'}},
+            h('td',{style:{padding:'10px 12px',fontFamily:'var(--mono)',maxWidth:'420px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},
+              kind==='bot' ? r.bot_phrase : r.user_phrase),
+            h('td',{style:{padding:'10px 12px',fontFamily:'var(--mono)',fontWeight:600}}, r.occurrences),
+            h('td',{style:{padding:'10px 12px',fontFamily:'var(--mono)',color:'var(--text3)'}}, `${r.pct_of_exchanges || 0}%`),
+            kind === 'bot'
+              ? h('td',{style:{padding:'10px 12px',fontFamily:'var(--mono)',color: r.no_cta_count > 0 ? 'var(--hot)' : 'var(--text3)'}}, r.no_cta_count || 0)
+              : h('td',{style:{padding:'10px 12px',fontFamily:'var(--mono)',color: +r.handle_rate_pct < 50 ? 'var(--hot)' : +r.handle_rate_pct < 70 ? '#D97706' : 'var(--green)'}}, r.handle_rate_pct != null ? `${r.handle_rate_pct}%` : '—'),
+            kind === 'bot'
+              ? h('td',{style:{padding:'10px 12px',fontFamily:'var(--mono)',color:'var(--text3)'}}, r.too_long_count || 0)
+              : h('td',{style:{padding:'10px 12px',fontFamily:'var(--mono)',color:'var(--text2)'}}, r.avg_quality ? (+r.avg_quality).toFixed(1) : '—')
+          ))
+        )
+      );
+
+  const patternsPanel = h('div',null,
+    h('div',{style:{fontSize:'12px',color:'var(--text3)',marginBottom:'12px',fontFamily:'var(--mono)'}},
+      'Phrases the bot OR the customer say repeatedly. Bot phrases with high no_cta = passive reply pattern. User phrases with low handle rate = prompt gap.'),
+    h('div',{className:'card',style:{marginBottom:'16px'}},
+      h('div',{className:'card-hd'},h('span',{className:'card-title'},'Bot phrases that keep appearing')),
+      h('div',{style:{overflowX:'auto'}}, patternsTable(patterns.bot, 'bot'))
+    ),
+    h('div',{className:'card'},
+      h('div',{className:'card-hd'},h('span',{className:'card-title'},'Customer phrases that keep appearing')),
+      h('div',{style:{overflowX:'auto'}}, patternsTable(patterns.user, 'user'))
+    )
+  );
+
+  // ── Customer Behavior panel ──
+  const behaviorList = (rows, title, emptyMsg) => h('div',{className:'card',style:{marginBottom:'12px'}},
+    h('div',{className:'card-hd'},h('span',{className:'card-title'}, title)),
+    h('div',{className:'card-bd'},
+      rows.length === 0
+        ? h('div',{style:{padding:'12px',color:'var(--text3)',fontSize:'12px'}}, emptyMsg)
+        : rows.map(r => h('div',{key:r.label,style:{marginBottom:'8px'}},
+            h('div',{style:{display:'flex',justifyContent:'space-between',fontSize:'12px',marginBottom:'4px'}},
+              h('span',{style:{fontWeight:600}}, r.label.replace(/_/g,' ')),
+              h('span',{style:{color:'var(--text3)',fontFamily:'var(--mono)'}}, `${r.occurrences} (${r.pct_of_exchanges || 0}%)`)
+            ),
+            h('div',{style:{height:'6px',background:'var(--surface2)',borderRadius:'3px',overflow:'hidden'}},
+              h('div',{style:{height:'100%',width:`${Math.min(+r.pct_of_exchanges||0,100)}%`,background:'var(--brand)'}})
+            )
+          ))
+    )
+  );
+
+  const behaviorPanel = h('div',null,
+    behavior.missed && behavior.missed.evaluated_count > 0 && h('div',{className:'card',style:{marginBottom:'16px',background: +behavior.missed.missed_rate_pct >= 15 ? '#FEF3C7' : 'var(--surface)'}},
+      h('div',{className:'card-bd',style:{display:'flex',alignItems:'center',gap:'16px'}},
+        h('div',{style:{fontSize:'28px',fontWeight:700,color: +behavior.missed.missed_rate_pct >= 15 ? '#92400E' : 'var(--text)'}}, `${behavior.missed.missed_rate_pct || 0}%`),
+        h('div',null,
+          h('div',{style:{fontWeight:600}},'Missed Signal Rate'),
+          h('div',{style:{fontSize:'12px',color:'var(--text3)'}}, `${behavior.missed.missed_count} of ${behavior.missed.evaluated_count} exchanges had a buying signal the bot ignored`)
+        )
+      )
+    ),
+    h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'12px'}},
+      behaviorList(behavior.intents,  'Customer Intent (last 7d)', 'No intent data yet'),
+      behaviorList(behavior.signals,  'Buying Signals Customers Drop', 'No signal data yet'),
+      behaviorList(behavior.concerns, 'Top Customer Concerns', 'No concern data yet')
+    )
+  );
+
   const queuePanel = h('div',null,
     h('div',{style:{display:'flex',gap:'8px',marginBottom:'12px',alignItems:'center'}},
       h('button',{className:`btn btn-sm ${!showReviewed?'btn-primary':'btn-ghost'}`,onClick:()=>setShowReviewed(false)},'Needs Review'),
@@ -1712,6 +1792,8 @@ const CampaignIntelPage = ({apiBase,isDemo,showToast}) => {
       tab === 'overview'   ? overviewPanel :
       tab === 'funnel'     ? funnelPanel   :
       tab === 'issues'     ? issuesPanel   :
+      tab === 'patterns'   ? patternsPanel :
+      tab === 'behavior'   ? behaviorPanel :
       tab === 'hallu'      ? halluPanel    :
       tab === 'objections' ? objPanel      :
       tab === 'queue'      ? queuePanel    : null

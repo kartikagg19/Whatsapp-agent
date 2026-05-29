@@ -52,12 +52,25 @@ create table if not exists conversation_analysis (
   human_reviewed_at       timestamptz
 );
 
+-- ── Customer-side analysis columns + phrase signatures (idempotent) ─
+--  These are added in a second pass so re-running the file on an
+--  existing table just adds the new columns without touching data.
+alter table conversation_analysis add column if not exists customer_intent          text;
+alter table conversation_analysis add column if not exists customer_buying_signals  text[] default '{}';
+alter table conversation_analysis add column if not exists customer_concerns        text[] default '{}';
+alter table conversation_analysis add column if not exists missed_signal            boolean;
+alter table conversation_analysis add column if not exists bot_phrase               text;   -- first ~6 words, normalized
+alter table conversation_analysis add column if not exists user_phrase              text;   -- first ~6 words, normalized
+
 -- ── Indexes (idempotent) ───────────────────────────────────────────
 create index if not exists ca_created_at_idx   on conversation_analysis(created_at desc);
 create index if not exists ca_phone_idx        on conversation_analysis(phone);
 create index if not exists ca_eval_status_idx  on conversation_analysis(eval_status) where eval_status = 'pending';
 create index if not exists ca_review_idx       on conversation_analysis(human_reviewed, created_at desc);
 create index if not exists ca_rule_flags_idx   on conversation_analysis using gin (rule_flags);
+create index if not exists ca_bot_phrase_idx   on conversation_analysis(bot_phrase) where bot_phrase is not null;
+create index if not exists ca_user_phrase_idx  on conversation_analysis(user_phrase) where user_phrase is not null;
+create index if not exists ca_intent_idx       on conversation_analysis(customer_intent) where customer_intent is not null;
 
 -- ── View 1: daily_campaign_metrics ────────────────────────────────
 -- Drives the Overview panel. One row per day for the last 30 days.
@@ -187,6 +200,136 @@ where created_at > now() - interval '7 days'
 group by objection_type
 order by occurrences desc;
 
+-- ── View 6: bot_recurring_patterns ────────────────────────────────
+-- "These are the bot phrases that keep showing up." Grouped by the
+-- first-N-words signature stored in bot_phrase. Each group also tags
+-- which rule_flags / issues most commonly co-occur with that phrase,
+-- so a phrase that always fires no_cta jumps out.
+create or replace view bot_recurring_patterns as
+with totals as (
+  select count(*)::numeric as total
+  from conversation_analysis
+  where created_at > now() - interval '7 days'
+    and bot_phrase is not null
+)
+select
+  bot_phrase,
+  count(*)                                                            as occurrences,
+  round((count(*) / nullif((select total from totals), 0)) * 100, 1)  as pct_of_exchanges,
+  count(*) filter (where 'no_cta' = any(rule_flags))                  as no_cta_count,
+  count(*) filter (where 'too_long' = any(rule_flags))                as too_long_count,
+  count(*) filter (where 'hallucination' = any(rule_flags))           as hallucination_count,
+  count(*) filter (where 'robotic' = any(issues))                     as robotic_count,
+  avg(response_quality_score)
+    filter (where response_quality_score is not null)                 as avg_quality,
+  -- Sample one exchange ID per phrase so the UI can deep-link to a real example.
+  (array_agg(id order by created_at desc))[1]                         as sample_id
+from conversation_analysis
+where created_at > now() - interval '7 days'
+  and bot_phrase is not null
+group by bot_phrase
+having count(*) >= 3       -- ignore one-off phrases
+order by count(*) desc
+limit 50;
+
+-- ── View 7: user_recurring_patterns ───────────────────────────────
+-- "These are the things customers keep asking." Same shape as bot
+-- patterns. Especially useful for finding intents the prompt doesn't
+-- handle well: if "loan kaise milega" appears 200 times and the bot's
+-- handle rate on those is 40%, that's a specific prompt gap.
+create or replace view user_recurring_patterns as
+with totals as (
+  select count(*)::numeric as total
+  from conversation_analysis
+  where created_at > now() - interval '7 days'
+    and user_phrase is not null
+)
+select
+  user_phrase,
+  count(*)                                                            as occurrences,
+  round((count(*) / nullif((select total from totals), 0)) * 100, 1)  as pct_of_exchanges,
+  count(*) filter (where handled = true)                              as handled_count,
+  round(
+    100.0 * count(*) filter (where handled = true) / nullif(count(*) filter (where handled is not null), 0),
+    1
+  )                                                                   as handle_rate_pct,
+  avg(response_quality_score)
+    filter (where response_quality_score is not null)                 as avg_quality,
+  (array_agg(id order by created_at desc))[1]                         as sample_id
+from conversation_analysis
+where created_at > now() - interval '7 days'
+  and user_phrase is not null
+group by user_phrase
+having count(*) >= 3
+order by count(*) desc
+limit 50;
+
+-- ── View 8: customer_behavior ─────────────────────────────────────
+-- Aggregated view of WHO the customers are, not just what the bot did.
+--   - intent breakdown (browsing / researching / comparing / ready / etc.)
+--   - top buying signals across the campaign
+--   - top concerns
+--   - missed-signal rate (how often did the customer drop a buying
+--     signal the bot ignored — high value, low effort to fix)
+create or replace view customer_behavior as
+with t as (
+  select count(*)::numeric as total
+  from conversation_analysis
+  where created_at > now() - interval '7 days'
+    and customer_intent is not null
+),
+intents as (
+  select customer_intent as label, count(*) as cnt, 'intent' as kind
+  from conversation_analysis
+  where created_at > now() - interval '7 days'
+    and customer_intent is not null
+  group by customer_intent
+),
+signals as (
+  select unnest(customer_buying_signals) as label, count(*) as cnt, 'signal' as kind
+  from conversation_analysis
+  where created_at > now() - interval '7 days'
+    and customer_buying_signals is not null
+  group by 1
+),
+concerns as (
+  select unnest(customer_concerns) as label, count(*) as cnt, 'concern' as kind
+  from conversation_analysis
+  where created_at > now() - interval '7 days'
+    and customer_concerns is not null
+  group by 1
+)
+select
+  kind,
+  label,
+  cnt                                                  as occurrences,
+  round((cnt / nullif((select total from t), 0)) * 100, 1) as pct_of_exchanges
+from (
+  select * from intents
+  union all
+  select * from signals
+  union all
+  select * from concerns
+) all_signals
+order by kind, cnt desc;
+
+-- ── View 9: missed_signals_summary ────────────────────────────────
+-- Single number: % of evaluated exchanges where the customer dropped
+-- a buying signal the bot ignored. If this is >15%, the prompt isn't
+-- catching intent cues — high-impact place to focus.
+create or replace view missed_signals_summary as
+select
+  count(*) filter (where missed_signal = true)                                          as missed_count,
+  count(*) filter (where missed_signal is not null)                                     as evaluated_count,
+  round(
+    100.0 * count(*) filter (where missed_signal = true) / nullif(count(*) filter (where missed_signal is not null), 0),
+    1
+  )                                                                                    as missed_rate_pct
+from conversation_analysis
+where created_at > now() - interval '7 days';
+
 -- ── Done ──────────────────────────────────────────────────────────
 -- After running this, the analyzer in the backend will start writing
 -- rows automatically. You don't need to touch SQL again.
+--
+-- Safe to re-run after edits — all ALTER/CREATE statements are guarded.

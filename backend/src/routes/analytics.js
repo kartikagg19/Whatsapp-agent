@@ -186,6 +186,53 @@ router.get('/queue', async (req, res) => {
   }
 });
 
+// ── GET /api/analytics/patterns ────────────────────────────────────
+// Returns both bot and user recurring phrase patterns (last 7d).
+// Sorted by occurrences. Each row also has a sample_id you can fetch
+// individually via /queue or render in a deep-link.
+router.get('/patterns', async (req, res) => {
+  try {
+    const [botR, userR] = await Promise.all([
+      db().from('bot_recurring_patterns').select('*'),
+      db().from('user_recurring_patterns').select('*')
+    ]);
+    if (botR.error && isSchemaMissing(botR.error)) {
+      return handleSchemaMissing(res, { bot: [], user: [] });
+    }
+    if (botR.error)  return res.status(500).json({ error: botR.error.message });
+    if (userR.error) return res.status(500).json({ error: userR.error.message });
+    res.json({ bot: botR.data || [], user: userR.data || [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GET /api/analytics/customer-behavior ───────────────────────────
+// Returns intent breakdown, buying signals, concerns, and the
+// missed-signal rate. Structured for the dashboard "Customer Behavior"
+// panel — three lists (intents / signals / concerns) + one summary stat.
+router.get('/customer-behavior', async (req, res) => {
+  try {
+    const [behR, missR] = await Promise.all([
+      db().from('customer_behavior').select('*'),
+      db().from('missed_signals_summary').select('*').single()
+    ]);
+    if (behR.error && isSchemaMissing(behR.error)) {
+      return handleSchemaMissing(res, { intents: [], signals: [], concerns: [], missed: null });
+    }
+    if (behR.error) return res.status(500).json({ error: behR.error.message });
+    const rows = behR.data || [];
+    res.json({
+      intents:  rows.filter(r => r.kind === 'intent'),
+      signals:  rows.filter(r => r.kind === 'signal'),
+      concerns: rows.filter(r => r.kind === 'concern'),
+      missed:   missR.data || null
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── POST /api/analytics/queue/:id/verdict ──────────────────────────
 // Reviewer marks a queue item as confirmed_bad / false_alarm / hallucination_confirmed.
 router.post('/queue/:id/verdict', express.json(), async (req, res) => {

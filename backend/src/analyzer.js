@@ -232,6 +232,27 @@ function shouldEvaluate(ruleFlags) {
   return Math.floor(Math.random() * SAMPLE_RATE) === 0;
 }
 
+// ── Phrase signature (first ~6 normalized words) ───────────────────
+// Used to group "the same kind of reply" together for the Recurring
+// Patterns panel. Strips punctuation, lowercases, removes emoji,
+// collapses whitespace, then takes the first 6 tokens. Deterministic
+// — same input always produces same signature.
+const PHRASE_WORD_COUNT = 6;
+function phraseSignature(text) {
+  if (!text || typeof text !== 'string') return null;
+  const normalized = text
+    .toLowerCase()
+    // strip emoji + most symbols, keep letters, digits, spaces, common Indic ranges
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, ' ')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return null;
+  const words = normalized.split(' ').slice(0, PHRASE_WORD_COUNT);
+  if (words.length < 2) return null; // single word isn't a useful signature
+  return words.join(' ');
+}
+
 // ────────────────────────────────────────────────────────────────────
 // Public API
 // ────────────────────────────────────────────────────────────────────
@@ -267,6 +288,8 @@ async function analyzeExchange({ phone, userMessage, botMessage }) {
       rule_flags:           flags,
       hallucination_detail: hallu.detail,
       bot_message_length:   botMessage.length,
+      bot_phrase:           phraseSignature(botMessage),
+      user_phrase:          phraseSignature(userMessage),
       eval_status:          evalStatus
     };
 
@@ -295,6 +318,6 @@ module.exports = {
   // internal — exported for tests / worker reuse
   _internal: {
     extractFacts, checkHallucinations, checkForbidden, checkCTA, checkLength,
-    shouldEvaluate, loadGroundTruth, normalizePrice
+    shouldEvaluate, loadGroundTruth, normalizePrice, phraseSignature
   }
 };
