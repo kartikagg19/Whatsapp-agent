@@ -121,6 +121,25 @@ async function getCostStats() {
   return { total, avgPerConversation, perLead, totalConversations: perLead.length };
 }
 
+// Returns true if this phone has EVER sent us an inbound message
+// (role='user'). Used to decide if a free-form WhatsApp send is allowed
+// per Meta's 24h rule — if false, we must use a template instead.
+async function hasInboundFromPhone(phone) {
+  const { count, error } = await getDB().from('conversations')
+    .select('id', { count: 'exact', head: true })
+    .eq('phone', phone)
+    .eq('role', 'user');
+  if (error) {
+    // On error, assume "unknown" → caller should treat as new (safer:
+    // sending a template to an existing contact wastes a template send
+    // but always delivers, whereas sending free-form to a new number
+    // silently drops).
+    console.warn(`hasInboundFromPhone(${phone}) failed: ${error.message}`);
+    return false;
+  }
+  return (count || 0) > 0;
+}
+
 async function getHistory(phone, limit = 20) {
   const { data, error } = await getDB().from('conversations')
     .select('role,message').eq('phone', phone)
@@ -271,4 +290,4 @@ async function saveAppSettings(settingsObj) {
   if (error) throw error;
 }
 
-module.exports = { upsertLead, getAllLeads, getLeadByPhone, getStats, saveMessage, getHistory, getConversations, getKnowledgeBase, addKnowledge, deleteKnowledge, getKnowledgeText, uploadToStorage, getLeadsForFollowUp, markFollowUpSent, getCostStats, getAppSettings, saveAppSettings };
+module.exports = { upsertLead, getAllLeads, getLeadByPhone, getStats, saveMessage, getHistory, getConversations, hasInboundFromPhone, getKnowledgeBase, addKnowledge, deleteKnowledge, getKnowledgeText, uploadToStorage, getLeadsForFollowUp, markFollowUpSent, getCostStats, getAppSettings, saveAppSettings };
