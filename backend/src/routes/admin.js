@@ -533,33 +533,18 @@ router.post('/send', async (req, res) => {
     // ── SELF-HEALING TEMPLATE METADATA ────────────────────────────
     // Ask Meta what languages this template is actually approved in and
     // how many {{N}} placeholders the body has. If we have it wrong,
-    // adjust before the send instead of letting Meta reject. This is
-    // what stops the "configured wrong → silently fails" failure mode.
+    // adjust before the send instead of letting Meta reject.
     if (useTemplate) {
-      const variants = await getCachedTemplateInfo(resolvedTemplateName);
-      if (variants && variants.length > 0) {
-        // Pick the requested language if approved; else fall back to the first
-        // approved variant (the one Meta picked when you got it approved).
-        const requested = variants.find(v => v.language === resolvedTemplateLang);
-        const chosen = requested || variants[0];
-        if (!requested) {
-          console.log(`🔄 Template "${resolvedTemplateName}" not approved for lang "${resolvedTemplateLang}" — falling back to "${chosen.language}"`);
-          resolvedTemplateLang = chosen.language;
-        }
-        // Right-size params to what the template body actually expects.
-        if (resolvedTemplateParams.length > chosen.paramCount) {
-          console.log(`🔄 Template "${resolvedTemplateName}" expects ${chosen.paramCount} param(s), trimming from ${resolvedTemplateParams.length}`);
-          resolvedTemplateParams = resolvedTemplateParams.slice(0, chosen.paramCount);
-        } else if (resolvedTemplateParams.length < chosen.paramCount) {
-          // Pad missing params with the lead's name (if known) or a safe placeholder.
-          const padValue = crmLeadName || 'there';
-          while (resolvedTemplateParams.length < chosen.paramCount) {
-            resolvedTemplateParams.push(padValue);
-          }
-          console.log(`🔄 Template "${resolvedTemplateName}" expects ${chosen.paramCount} param(s), padded to [${resolvedTemplateParams.join(', ')}]`);
-        }
-      } else {
-        console.warn(`⚠️  Could not look up template "${resolvedTemplateName}" from Meta cache — proceeding with configured lang="${resolvedTemplateLang}" and ${resolvedTemplateParams.length} param(s). If this is the first send after restart and WABA_ID is unset, the template cache will be empty.`);
+      const resolved = await resolveTemplateArgs(
+        resolvedTemplateName,
+        resolvedTemplateLang,
+        resolvedTemplateParams,
+        crmLeadName || 'there'
+      );
+      resolvedTemplateLang = resolved.language;
+      resolvedTemplateParams = resolved.params;
+      if (resolved.lookupFailed) {
+        console.warn(`⚠️  Could not look up template "${resolvedTemplateName}" from Meta cache — proceeding with configured lang="${resolvedTemplateLang}" and ${resolvedTemplateParams.length} param(s). If WABA_ID is unset, set it as an env var.`);
       }
     }
 
@@ -704,24 +689,58 @@ router.post('/broadcast-template', async (req, res) => {
     if (!template_name)
       return res.status(400).json({ error: 'template_name required' });
 
+    // Resolve the template once for the global params — per-phone overrides
+    // re-resolve below so each row gets correct padding.
+    const globalResolved = await resolveTemplateArgs(template_name, language, params, 'there');
+    if (globalResolved.lookupFailed) {
+      console.warn(`⚠️  /broadcast-template: template "${template_name}" not in Meta cache; using requested lang="${language}" verbatim`);
+    } else if (globalResolved.language !== language) {
+      console.log(`📋 /broadcast-template: language "${language}" not approved for "${template_name}", using "${globalResolved.language}"`);
+    }
+
     let sent = 0, failed = 0, errors = [];
     for (const rawPhone of phones) {
       const phone = String(rawPhone).replace(/\D/g, '');
       if (!phone) { failed++; continue; }
-      // Per-number params override global params
-      const p = params_map[phone] || params_map[rawPhone] || params;
+      // Per-number params override global params.
+      const rawParams = params_map[phone] || params_map[rawPhone] || params;
+      // Re-resolve only if per-phone params are different from the global set;
+      // otherwise reuse the already-resolved global args (cheap, in-memory).
+      const usePerPhone = rawParams !== params;
+      const r = usePerPhone
+        ? await resolveTemplateArgs(template_name, language, rawParams, rawParams[0] || 'there')
+        : globalResolved;
       try {
-        await sendTemplate(phone, template_name, language, p);
-        await db.saveMessage({ phone, role: 'assistant', message: `[TEMPLATE:${template_name}] ${p.join(', ')}` });
-        await db.upsertLead({ phone, name: p[0] || 'Unknown', score: 3, label: 'COLD', intent: 'general' });
+        await sendTemplate(phone, template_name, r.language, r.params);
+        await db.saveMessage({ phone, role: 'assistant', message: `[TEMPLATE:${template_name}] ${r.params.join(', ')}` });
+        await db.upsertLead({ phone, name: rawParams[0] || 'Unknown', score: 3, label: 'COLD', intent: 'general' });
         sent++;
         await new Promise(r => setTimeout(r, 350)); // stay under rate limit
       } catch (e) {
+        const metaErr = e.response?.data?.error;
         failed++;
-        errors.push({ phone, error: e.response?.data?.error?.message || e.message });
+        errors.push({
+          phone,
+          error: metaErr ? `Meta ${metaErr.code}: ${metaErr.message}` : e.message,
+          meta_error: metaErr || null
+        });
       }
     }
-    res.json({ success: true, total: phones.length, sent, failed, errors: errors.slice(0, 20) });
+    res.json({
+      success: true,
+      total: phones.length,
+      sent,
+      failed,
+      errors: errors.slice(0, 20),
+      resolved: {
+        template_name,
+        language_used: globalResolved.language,
+        language_requested: language,
+        language_corrected: globalResolved.language !== language,
+        param_count: globalResolved.paramCount,
+        lookup_failed: globalResolved.lookupFailed
+      }
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -782,6 +801,52 @@ async function getCachedTemplateInfo(templateName) {
 
 // Force a refresh (used by an admin endpoint if needed).
 function invalidateTemplateCache() { templateCache = null; templateCacheLoadedAt = 0; }
+
+/**
+ * Self-heal template send arguments to match what Meta has actually approved.
+ * - If `requestedLang` isn't approved for this template, fall back to whichever
+ *   language Meta DID approve (the dashboard portal's en_US dropdown vs Meta's
+ *   actual `en` approval is the canonical case this fixes).
+ * - If `params` has too few entries, pad with `padValue` (lead name preferred,
+ *   'there' as a generic fallback). If it has too many, trim.
+ * - If the template name isn't in the cache (WABA_ID unset, or template not
+ *   approved at all), returns the inputs unchanged plus a `lookupFailed: true`
+ *   flag so the caller can decide whether to proceed or warn.
+ *
+ * Returns: { language, params, paramCount, lookupFailed, originalLang }
+ */
+async function resolveTemplateArgs(templateName, requestedLang, params, padValue = 'there') {
+  const variants = await getCachedTemplateInfo(templateName);
+  if (!variants || variants.length === 0) {
+    return {
+      language: requestedLang,
+      params: [...params],
+      paramCount: params.length,
+      lookupFailed: true,
+      originalLang: requestedLang
+    };
+  }
+  const requested = variants.find(v => v.language === requestedLang);
+  const chosen = requested || variants[0];
+  if (!requested) {
+    console.log(`🔄 Template "${templateName}" not approved for lang "${requestedLang}" — falling back to "${chosen.language}"`);
+  }
+  let resolved = [...params];
+  if (resolved.length > chosen.paramCount) {
+    console.log(`🔄 Template "${templateName}" expects ${chosen.paramCount} param(s), trimming from ${resolved.length}`);
+    resolved = resolved.slice(0, chosen.paramCount);
+  } else if (resolved.length < chosen.paramCount) {
+    while (resolved.length < chosen.paramCount) resolved.push(padValue);
+    console.log(`🔄 Template "${templateName}" expects ${chosen.paramCount} param(s), padded to [${resolved.join(', ')}]`);
+  }
+  return {
+    language: chosen.language,
+    params: resolved,
+    paramCount: chosen.paramCount,
+    lookupFailed: false,
+    originalLang: requestedLang
+  };
+}
 
 // GET /api/templates — list approved WhatsApp templates from Meta
 router.get('/templates', async (req, res) => {
