@@ -22,24 +22,28 @@ const SETTINGS_FILE = path.join(__dirname, '../../../settings.json');
 
 // ────────────────────────────────────────────────────────────────
 // In-memory dedupe for POST /api/send (call_id idempotency)
-// Maps call_id → timestamp. Entries older than 24h are pruned.
+// Keyed on `${phone}:${callId}` because the CRM's bulk-send flow
+// reuses one call_id across multiple recipients in the same batch.
+// Keying on call_id alone would silently drop everyone after the
+// first in such a batch.
 // ────────────────────────────────────────────────────────────────
 const dedupeMap = new Map();
 const DEDUPE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-function checkAndRecordCallId(callId) {
-  if (!callId) return false; // no call_id = not deduped
+function checkAndRecordCallId(phone, callId) {
+  if (!callId || !phone) return false; // no call_id = not deduped
+  const key = `${phone}:${callId}`;
   const now = Date.now();
-  const lastSent = dedupeMap.get(callId);
+  const lastSent = dedupeMap.get(key);
   if (lastSent && now - lastSent < DEDUPE_TTL_MS) {
     return true; // duplicate within 24h
   }
-  dedupeMap.set(callId, now);
-  // Prune old entries every 100 calls to prevent memory leak
+  dedupeMap.set(key, now);
+  // Prune old entries when the map grows to prevent memory leak
   if (dedupeMap.size > 1000) {
-    for (const [key, timestamp] of dedupeMap) {
+    for (const [k, timestamp] of dedupeMap) {
       if (now - timestamp >= DEDUPE_TTL_MS) {
-        dedupeMap.delete(key);
+        dedupeMap.delete(k);
       }
     }
   }
@@ -86,6 +90,48 @@ function loadSettings() {
   } catch {}
   return { ...DEFAULT_SETTINGS };
 }
+
+// ── DURABLE SETTINGS: hydrate from Supabase at boot ──────────────
+// Fly.io / container filesystems are ephemeral — settings.json is
+// wiped on every redeploy. Supabase is the source of truth.
+//
+// Strategy: write-through to BOTH Supabase and settings.json. All
+// existing call sites (ai.js, orchestrator.js, etc.) keep reading
+// settings.json synchronously and pick up the hydrated values without
+// changes. On first save from a fresh container, we ALSO push to
+// Supabase so the next redeploy boots with the same config.
+function writeSettingsFile(settingsObj) {
+  try {
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settingsObj, null, 2));
+  } catch (e) {
+    console.warn(`⚠️  Could not write settings.json cache: ${e.message}`);
+  }
+}
+
+async function hydrateSettingsFromDB() {
+  try {
+    const remote = await db.getAppSettings();
+    if (remote && typeof remote === 'object' && Object.keys(remote).length > 0) {
+      writeSettingsFile({ ...DEFAULT_SETTINGS, ...remote });
+      console.log(`✅ Settings hydrated from Supabase (${Object.keys(remote).length} keys)`);
+    } else if (fs.existsSync(SETTINGS_FILE)) {
+      // Local has data, Supabase doesn't — back-fill Supabase.
+      const local = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+      await db.saveAppSettings(local);
+      console.log(`⬆️  Settings back-filled to Supabase from local cache`);
+    } else {
+      console.log(`ℹ️  No persisted settings — using DEFAULT_SETTINGS until first save`);
+    }
+  } catch (e) {
+    console.warn(`⚠️  Settings hydration skipped (${e.message}) — falling back to settings.json / defaults. Make sure backend/sql/app_settings.sql has been run.`);
+  }
+}
+
+// Run once on module load. Awaiting at top level not available in CJS;
+// fire-and-forget is fine because /api/send's auto-template path that
+// depends on this is the only critical reader, and a CRM trigger that
+// races boot will just miss the fallback once (the same as today).
+hydrateSettingsFromDB();
 
 // ── AUTH ─────────────────────────────────────────────────────────
 
@@ -192,12 +238,23 @@ router.get('/agent-settings', (req, res) => {
 });
 
 // POST /api/agent-settings
-router.post('/agent-settings', (req, res) => {
+// Write-through: persist to Supabase (source of truth, survives Fly.io
+// redeploys) AND to settings.json on disk (so the other modules that
+// still read the file synchronously pick up the change immediately).
+router.post('/agent-settings', async (req, res) => {
   try {
     const current  = loadSettings();
     const updated  = { ...current, ...req.body };
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(updated, null, 2));
-    res.json({ success: true });
+    writeSettingsFile(updated);
+    try {
+      await db.saveAppSettings(updated);
+    } catch (e) {
+      // Don't fail the request if Supabase is down — local write succeeded.
+      // Surface a warning so the user knows persistence isn't durable yet.
+      console.warn(`⚠️  Settings saved locally but Supabase persistence failed: ${e.message}`);
+      return res.json({ success: true, persisted_to_db: false, warning: e.message });
+    }
+    res.json({ success: true, persisted_to_db: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -410,10 +467,11 @@ router.post('/send', async (req, res) => {
     const normalizedPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
     if (normalizedPhone !== phone) console.log(`📞 Phone normalized: ${phone} → ${normalizedPhone}`);
 
-    // Dedupe check
-    const isDuplicate = checkAndRecordCallId(call_id);
+    // Dedupe check — keyed on (phone, call_id) so bulk runs with
+    // shared call_ids don't block all recipients after the first.
+    const isDuplicate = checkAndRecordCallId(normalizedPhone, call_id);
     if (isDuplicate) {
-      console.log(`⏭️  DEDUPE: call_id=${call_id} already sent within 24h → skipping`);
+      console.log(`⏭️  DEDUPE: phone=${normalizedPhone} call_id=${call_id} already sent within 24h → skipping`);
       return res.status(200).json({ success: true, deduped: true });
     }
 

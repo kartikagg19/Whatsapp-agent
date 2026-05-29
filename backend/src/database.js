@@ -250,4 +250,25 @@ async function markFollowUpSent(phone) {
   if (error) throw error;
 }
 
-module.exports = { upsertLead, getAllLeads, getLeadByPhone, getStats, saveMessage, getHistory, getConversations, getKnowledgeBase, addKnowledge, deleteKnowledge, getKnowledgeText, uploadToStorage, getLeadsForFollowUp, markFollowUpSent, getCostStats };
+// ── APP SETTINGS (single-row durable config) ─────────────────────
+// Backs settings.json on disk so Fly.io ephemeral containers don't
+// lose template defaults on redeploy. See backend/sql/app_settings.sql.
+
+async function getAppSettings() {
+  const { data, error } = await getDB()
+    .from('app_settings')
+    .select('data')
+    .eq('id', 1)
+    .single();
+  if (error && error.code !== 'PGRST116') throw error;
+  return data?.data || null;
+}
+
+async function saveAppSettings(settingsObj) {
+  const { error } = await getDB()
+    .from('app_settings')
+    .upsert({ id: 1, data: settingsObj, updated_at: new Date().toISOString() });
+  if (error) throw error;
+}
+
+module.exports = { upsertLead, getAllLeads, getLeadByPhone, getStats, saveMessage, getHistory, getConversations, getKnowledgeBase, addKnowledge, deleteKnowledge, getKnowledgeText, uploadToStorage, getLeadsForFollowUp, markFollowUpSent, getCostStats, getAppSettings, saveAppSettings };
