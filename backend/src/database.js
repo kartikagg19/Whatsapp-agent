@@ -121,23 +121,33 @@ async function getCostStats() {
   return { total, avgPerConversation, perLead, totalConversations: perLead.length };
 }
 
-// Returns true if this phone has EVER sent us an inbound message
-// (role='user'). Used to decide if a free-form WhatsApp send is allowed
-// per Meta's 24h rule — if false, we must use a template instead.
-async function hasInboundFromPhone(phone) {
+// Returns true if this phone has sent us an inbound message within
+// Meta's free-form delivery window (24 hours). Used by /api/send to
+// decide whether free-form text is allowed or we must use a template.
+//
+// Meta silently drops free-form sends to phones outside the 24h
+// window (HTTP 200 from the API, but no delivery), so this check is
+// the line between "delivered" and "lost".
+async function hasRecentInboundFromPhone(phone, windowHours = 24) {
+  const cutoff = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
   const { count, error } = await getDB().from('conversations')
     .select('id', { count: 'exact', head: true })
     .eq('phone', phone)
-    .eq('role', 'user');
+    .eq('role', 'user')
+    .gte('created_at', cutoff);
   if (error) {
-    // On error, assume "unknown" → caller should treat as new (safer:
-    // sending a template to an existing contact wastes a template send
-    // but always delivers, whereas sending free-form to a new number
-    // silently drops).
-    console.warn(`hasInboundFromPhone(${phone}) failed: ${error.message}`);
+    // On error, assume "outside window" — safer to send a template
+    // (always delivers) than free-form (might silently drop).
+    console.warn(`hasRecentInboundFromPhone(${phone}) failed: ${error.message}`);
     return false;
   }
   return (count || 0) > 0;
+}
+
+// Kept as a thin alias for callers that only care "has ever messaged".
+// Currently unused after the 24h-window switch; safe to remove later.
+async function hasInboundFromPhone(phone) {
+  return hasRecentInboundFromPhone(phone, 24 * 365); // ~1 year
 }
 
 async function getHistory(phone, limit = 20) {
@@ -290,4 +300,4 @@ async function saveAppSettings(settingsObj) {
   if (error) throw error;
 }
 
-module.exports = { upsertLead, getAllLeads, getLeadByPhone, getStats, saveMessage, getHistory, getConversations, hasInboundFromPhone, getKnowledgeBase, addKnowledge, deleteKnowledge, getKnowledgeText, uploadToStorage, getLeadsForFollowUp, markFollowUpSent, getCostStats, getAppSettings, saveAppSettings };
+module.exports = { upsertLead, getAllLeads, getLeadByPhone, getStats, saveMessage, getHistory, getConversations, hasInboundFromPhone, hasRecentInboundFromPhone, getKnowledgeBase, addKnowledge, deleteKnowledge, getKnowledgeText, uploadToStorage, getLeadsForFollowUp, markFollowUpSent, getCostStats, getAppSettings, saveAppSettings };
