@@ -77,16 +77,27 @@ const DEFAULT_SETTINGS = {
   followup_warm_hours:  48,
   followup_cold_hours:  72,
   followup_check_hours: 6,
-  // Default template for first-contact (new numbers from CRM)
-  default_template_name:     '',   // e.g. "dreamhome_intro"
-  default_template_language: 'en', // "en", "en_US", "hi"
-  default_template_params:   ''    // comma-separated, e.g. "Niharika,Krishna Group"
+  // Default template for first-contact (new numbers from CRM).
+  // Env-var overrides take priority — set DEFAULT_TEMPLATE_NAME etc.
+  // as Fly.io secrets to change without code edit + redeploy.
+  default_template_name:     process.env.DEFAULT_TEMPLATE_NAME     || 'krishna_group',
+  default_template_language: process.env.DEFAULT_TEMPLATE_LANGUAGE || 'en',
+  default_template_params:   process.env.DEFAULT_TEMPLATE_PARAMS   || ''
 };
 
 function loadSettings() {
   try {
-    if (fs.existsSync(SETTINGS_FILE))
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) };
+    if (fs.existsSync(SETTINGS_FILE)) {
+      const onDisk = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+      // Strip empty strings from on-disk overrides so they don't blank
+      // out hard-coded / env defaults (e.g. someone hits Save in the
+      // dashboard with default_template_name empty — without this,
+      // we'd lose the krishna_group default).
+      for (const k of Object.keys(onDisk)) {
+        if (onDisk[k] === '' || onDisk[k] === null) delete onDisk[k];
+      }
+      return { ...DEFAULT_SETTINGS, ...onDisk };
+    }
   } catch {}
   return { ...DEFAULT_SETTINGS };
 }
@@ -519,6 +530,24 @@ router.post('/send', async (req, res) => {
       return res.status(400).json({ error: 'phone and (message or template_name) required' });
     }
 
+    // ── SELF-HEALING TEMPLATE METADATA ────────────────────────────
+    // Ask Meta what languages this template is actually approved in and
+    // how many {{N}} placeholders the body has. If we have it wrong,
+    // adjust before the send instead of letting Meta reject.
+    if (useTemplate) {
+      const resolved = await resolveTemplateArgs(
+        resolvedTemplateName,
+        resolvedTemplateLang,
+        resolvedTemplateParams,
+        crmLeadName || 'there'
+      );
+      resolvedTemplateLang = resolved.language;
+      resolvedTemplateParams = resolved.params;
+      if (resolved.lookupFailed) {
+        console.warn(`⚠️  Could not look up template "${resolvedTemplateName}" from Meta cache — proceeding with configured lang="${resolvedTemplateLang}" and ${resolvedTemplateParams.length} param(s). If WABA_ID is unset, set it as an env var.`);
+      }
+    }
+
     const msgPrefix = call_id ? `[CRM ${call_id}]` : '[MANUAL]';
     const templateParamText = resolvedTemplateParams.join(', ');
     const templateSummary = `${msgPrefix} [TEMPLATE:${resolvedTemplateName}] ${templateParamText}`.trim();
@@ -660,38 +689,171 @@ router.post('/broadcast-template', async (req, res) => {
     if (!template_name)
       return res.status(400).json({ error: 'template_name required' });
 
+    // Resolve the template once for the global params — per-phone overrides
+    // re-resolve below so each row gets correct padding.
+    const globalResolved = await resolveTemplateArgs(template_name, language, params, 'there');
+    if (globalResolved.lookupFailed) {
+      console.warn(`⚠️  /broadcast-template: template "${template_name}" not in Meta cache; using requested lang="${language}" verbatim`);
+    } else if (globalResolved.language !== language) {
+      console.log(`📋 /broadcast-template: language "${language}" not approved for "${template_name}", using "${globalResolved.language}"`);
+    }
+
     let sent = 0, failed = 0, errors = [];
     for (const rawPhone of phones) {
       const phone = String(rawPhone).replace(/\D/g, '');
       if (!phone) { failed++; continue; }
-      // Per-number params override global params
-      const p = params_map[phone] || params_map[rawPhone] || params;
+      // Per-number params override global params.
+      const rawParams = params_map[phone] || params_map[rawPhone] || params;
+      // Re-resolve only if per-phone params are different from the global set;
+      // otherwise reuse the already-resolved global args (cheap, in-memory).
+      const usePerPhone = rawParams !== params;
+      const r = usePerPhone
+        ? await resolveTemplateArgs(template_name, language, rawParams, rawParams[0] || 'there')
+        : globalResolved;
       try {
-        await sendTemplate(phone, template_name, language, p);
-        await db.saveMessage({ phone, role: 'assistant', message: `[TEMPLATE:${template_name}] ${p.join(', ')}` });
-        await db.upsertLead({ phone, name: p[0] || 'Unknown', score: 3, label: 'COLD', intent: 'general' });
+        await sendTemplate(phone, template_name, r.language, r.params);
+        await db.saveMessage({ phone, role: 'assistant', message: `[TEMPLATE:${template_name}] ${r.params.join(', ')}` });
+        await db.upsertLead({ phone, name: rawParams[0] || 'Unknown', score: 3, label: 'COLD', intent: 'general' });
         sent++;
         await new Promise(r => setTimeout(r, 350)); // stay under rate limit
       } catch (e) {
+        const metaErr = e.response?.data?.error;
         failed++;
-        errors.push({ phone, error: e.response?.data?.error?.message || e.message });
+        errors.push({
+          phone,
+          error: metaErr ? `Meta ${metaErr.code}: ${metaErr.message}` : e.message,
+          meta_error: metaErr || null
+        });
       }
     }
-    res.json({ success: true, total: phones.length, sent, failed, errors: errors.slice(0, 20) });
+    res.json({
+      success: true,
+      total: phones.length,
+      sent,
+      failed,
+      errors: errors.slice(0, 20),
+      resolved: {
+        template_name,
+        language_used: globalResolved.language,
+        language_requested: language,
+        language_corrected: globalResolved.language !== language,
+        param_count: globalResolved.paramCount,
+        lookup_failed: globalResolved.lookupFailed
+      }
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// In-memory cache of approved templates from Meta. Keyed by template
+// name → { language, paramCount }. Used by /api/send to self-heal when
+// the configured language or param count doesn't match what Meta expects.
+let templateCache = null;
+let templateCacheLoadedAt = 0;
+const TEMPLATE_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+async function fetchApprovedTemplates() {
+  const axios = require('axios');
+  const wabaId = process.env.WABA_ID || '';
+  if (!wabaId) return [];
+  const r = await axios.get(`https://graph.facebook.com/v20.0/${wabaId}/message_templates`, {
+    headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` },
+    params: { fields: 'name,status,language,components', limit: 100 }
+  });
+  return (r.data.data || []).filter(t => t.status === 'APPROVED');
+}
+
+// Count {{N}} placeholders in a template's BODY component.
+// Header/footer/buttons aren't counted (the /api/send code only fills BODY).
+function countTemplateParams(template) {
+  const body = (template.components || []).find(c => c.type === 'BODY');
+  if (!body || !body.text) return 0;
+  const matches = body.text.match(/\{\{\s*\d+\s*\}\}/g);
+  return matches ? matches.length : 0;
+}
+
+async function getCachedTemplateInfo(templateName) {
+  const now = Date.now();
+  if (!templateCache || (now - templateCacheLoadedAt) > TEMPLATE_CACHE_TTL_MS) {
+    try {
+      const approved = await fetchApprovedTemplates();
+      templateCache = new Map();
+      for (const t of approved) {
+        // A template name can have multiple language variants. Keep all of
+        // them so /api/send can pick whichever language is asked for, with
+        // any-language-as-fallback if the requested one isn't approved.
+        if (!templateCache.has(t.name)) templateCache.set(t.name, []);
+        templateCache.get(t.name).push({
+          language: t.language,
+          paramCount: countTemplateParams(t)
+        });
+      }
+      templateCacheLoadedAt = now;
+      console.log(`📋 Template cache refreshed: ${templateCache.size} unique names`);
+    } catch (e) {
+      console.warn(`⚠️  Template cache refresh failed: ${e.message}`);
+      return null;
+    }
+  }
+  const variants = templateCache.get(templateName);
+  if (!variants || variants.length === 0) return null;
+  return variants;
+}
+
+// Force a refresh (used by an admin endpoint if needed).
+function invalidateTemplateCache() { templateCache = null; templateCacheLoadedAt = 0; }
+
+/**
+ * Self-heal template send arguments to match what Meta has actually approved.
+ * - If `requestedLang` isn't approved for this template, fall back to whichever
+ *   language Meta DID approve (the dashboard portal's en_US dropdown vs Meta's
+ *   actual `en` approval is the canonical case this fixes).
+ * - If `params` has too few entries, pad with `padValue` (lead name preferred,
+ *   'there' as a generic fallback). If it has too many, trim.
+ * - If the template name isn't in the cache (WABA_ID unset, or template not
+ *   approved at all), returns the inputs unchanged plus a `lookupFailed: true`
+ *   flag so the caller can decide whether to proceed or warn.
+ *
+ * Returns: { language, params, paramCount, lookupFailed, originalLang }
+ */
+async function resolveTemplateArgs(templateName, requestedLang, params, padValue = 'there') {
+  const variants = await getCachedTemplateInfo(templateName);
+  if (!variants || variants.length === 0) {
+    return {
+      language: requestedLang,
+      params: [...params],
+      paramCount: params.length,
+      lookupFailed: true,
+      originalLang: requestedLang
+    };
+  }
+  const requested = variants.find(v => v.language === requestedLang);
+  const chosen = requested || variants[0];
+  if (!requested) {
+    console.log(`🔄 Template "${templateName}" not approved for lang "${requestedLang}" — falling back to "${chosen.language}"`);
+  }
+  let resolved = [...params];
+  if (resolved.length > chosen.paramCount) {
+    console.log(`🔄 Template "${templateName}" expects ${chosen.paramCount} param(s), trimming from ${resolved.length}`);
+    resolved = resolved.slice(0, chosen.paramCount);
+  } else if (resolved.length < chosen.paramCount) {
+    while (resolved.length < chosen.paramCount) resolved.push(padValue);
+    console.log(`🔄 Template "${templateName}" expects ${chosen.paramCount} param(s), padded to [${resolved.join(', ')}]`);
+  }
+  return {
+    language: chosen.language,
+    params: resolved,
+    paramCount: chosen.paramCount,
+    lookupFailed: false,
+    originalLang: requestedLang
+  };
+}
 
 // GET /api/templates — list approved WhatsApp templates from Meta
 router.get('/templates', async (req, res) => {
   try {
-    const axios = require('axios');
     const wabaId = process.env.WABA_ID || '';
     if (!wabaId) return res.json({ success: true, data: [] });
-    const r = await axios.get(`https://graph.facebook.com/v20.0/${wabaId}/message_templates`, {
-      headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` },
-      params: { fields: 'name,status,language,components', limit: 50 }
-    });
-    const approved = (r.data.data || []).filter(t => t.status === 'APPROVED');
+    const approved = await fetchApprovedTemplates();
     res.json({ success: true, data: approved });
   } catch (e) {
     res.json({ success: true, data: [] }); // non-fatal
