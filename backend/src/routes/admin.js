@@ -346,27 +346,52 @@ router.get('/leads/:phone', async (req, res) => {
 
 router.post('/send', async (req, res) => {
   try {
-    const { phone, message, call_id, template, template_name, template_params, template_language } = req.body;
+    const {
+      phone, message, call_id, template,
+      template_name, template_params, template_language,
+      // Accept name from CRM under any of these aliases — used to set lead.name
+      // and as a last-resort fallback for {{1}} when CRM forgets template_params.
+      name: bodyName, lead_name: bodyLeadName, contact_name: bodyContactName,
+      // Aliases for params/language in case CRM uses unprefixed names.
+      params: bodyParams, language: bodyLanguage
+    } = req.body;
     const headerSecret = req.headers['x-webhook-secret'];
     const crmSecret = process.env.CRM_WEBHOOK_SECRET || '';
     const isCrmTrigger = !!headerSecret;
     const timestamp = new Date().toISOString();
+
+    // Normalize aliases — template_* wins, unprefixed is fallback
+    const incomingTemplateParams = (template_params !== undefined && template_params !== null)
+      ? template_params
+      : bodyParams;
+    const incomingTemplateLang = template_language || bodyLanguage;
+    const crmLeadName = (bodyName || bodyLeadName || bodyContactName || '').toString().trim();
+
     const isTemplateMode = !!template_name;
 
-    // Log incoming request
+    // Log incoming request — dump full body for CRM triggers so we can diagnose
+    // field-name / payload-shape mismatches from a single failing request.
     console.log(`\n📨 ╔═══════════════════════════════════════════`);
     console.log(`   ║ ${isCrmTrigger ? 'CRM' : 'DASHBOARD'} TRIGGER`);
     console.log(`   ║ Time: ${timestamp}`);
     console.log(`   ║ Phone: ${phone}`);
     console.log(`   ║ Call ID: ${call_id || 'none'}`);
     if (isTemplateMode) {
-      const logParams = Array.isArray(template_params)
-        ? template_params
-        : (template_params ? [template_params] : []);
+      const logParams = Array.isArray(incomingTemplateParams)
+        ? incomingTemplateParams
+        : (incomingTemplateParams ? [incomingTemplateParams] : []);
       console.log(`   ║ Template: ${template_name}`);
       console.log(`   ║ Params: ${logParams.join(', ')}`);
+      console.log(`   ║ Language: ${incomingTemplateLang || 'en (default)'}`);
     } else if (message) {
       console.log(`   ║ Message: ${String(message).substring(0, 50)}...`);
+    }
+    if (crmLeadName) console.log(`   ║ Lead Name: ${crmLeadName}`);
+    if (isCrmTrigger) {
+      const safeBody = { ...req.body };
+      if (typeof safeBody.message === 'string' && safeBody.message.length > 200)
+        safeBody.message = safeBody.message.slice(0, 200) + '…';
+      console.log(`   ║ Raw body: ${JSON.stringify(safeBody)}`);
     }
     console.log(`   ╚═══════════════════════════════════════════\n`);
 
@@ -395,11 +420,17 @@ router.post('/send', async (req, res) => {
     // ── AUTO-TEMPLATE: if no template given, check if this is a new number ──
     // If it is, auto-use the default_template_name from settings
     let resolvedTemplateName = template_name?.trim() || '';
-    let resolvedTemplateParams = Array.isArray(template_params)
-      ? template_params
-      : (template_params ? [template_params] : []);
-    let resolvedTemplateLang = template_language || 'en';
+    let resolvedTemplateParams = Array.isArray(incomingTemplateParams)
+      ? incomingTemplateParams.filter(p => p !== undefined && p !== null).map(p => String(p))
+      : (incomingTemplateParams ? [String(incomingTemplateParams)] : []);
+    let resolvedTemplateLang = incomingTemplateLang || 'en';
     let existingLead;
+
+    // If CRM forgot template_params but did pass a name, use it for {{1}}.
+    if (resolvedTemplateName && resolvedTemplateParams.length === 0 && crmLeadName) {
+      resolvedTemplateParams = [crmLeadName];
+      console.log(`🔄 Using lead name "${crmLeadName}" as template param {{1}}`);
+    }
 
     if (!resolvedTemplateName) {
       existingLead = await db.getLeadByPhone(normalizedPhone).catch(() => null);
@@ -410,8 +441,15 @@ router.post('/send', async (req, res) => {
           resolvedTemplateName = s.default_template_name.trim();
           resolvedTemplateLang = s.default_template_language || 'en';
           const rawParams = (s.default_template_params || '').split(',').map(p => p.trim()).filter(Boolean);
-          resolvedTemplateParams = rawParams.length ? rawParams : resolvedTemplateParams;
-          console.log(`🔄 AUTO-TEMPLATE: new contact detected → using default template "${resolvedTemplateName}"`);
+          // Prefer CRM-supplied name as {{1}} over the static settings default
+          if (crmLeadName && rawParams.length > 0) {
+            resolvedTemplateParams = [crmLeadName, ...rawParams.slice(1)];
+          } else {
+            resolvedTemplateParams = rawParams.length ? rawParams : resolvedTemplateParams;
+          }
+          console.log(`🔄 AUTO-TEMPLATE: new contact detected → using default template "${resolvedTemplateName}" with params [${resolvedTemplateParams.join(', ')}]`);
+        } else {
+          console.warn(`⚠️  NEW CONTACT with no template_name and no default_template_name configured — Meta will reject free-form text (24h rule).`);
         }
       }
     }
@@ -431,6 +469,7 @@ router.post('/send', async (req, res) => {
 
     // ── SEND ──────────────────────────────────────────────────────
     let sendError = null;
+    let metaErrorDetail = null;
     let metaSuccess = false;
     const sentVia = useTemplate ? 'template' : 'message';
 
@@ -446,29 +485,54 @@ router.post('/send', async (req, res) => {
       }
     } catch (err) {
       const metaErr = err.response?.data?.error;
+      metaErrorDetail = metaErr ? {
+        code: metaErr.code,
+        type: metaErr.type,
+        message: metaErr.message,
+        error_subcode: metaErr.error_subcode,
+        error_data: metaErr.error_data,
+        fbtrace_id: metaErr.fbtrace_id
+      } : null;
       sendError = metaErr
         ? `Meta error ${metaErr.code}: ${metaErr.message}`
         : (err.message || 'Meta API error');
-      console.error(`❌ SEND FAILED (${sentVia}) to ${normalizedPhone}:`, sendError);
-      if (!useTemplate && (sendError.includes('131047') || sendError.includes('outside'))) {
-        console.warn(`💡 HINT: This number may not have messaged in 24h. Use template_name instead of message.`);
+      console.error(`❌ SEND FAILED (${sentVia}) to ${normalizedPhone}: ${sendError}`);
+      if (metaErrorDetail) {
+        console.error(`   Full Meta error: ${JSON.stringify(metaErrorDetail)}`);
+      }
+      if (!useTemplate && (String(metaErr?.code) === '131047' || (sendError || '').includes('outside'))) {
+        console.warn(`💡 HINT: Free-form text rejected by Meta — recipient hasn't messaged in 24h. CRM should send template_name for new numbers.`);
         sendError += ' — Use template_name for first-contact (new numbers).';
       }
     }
+
+    // Determine the best name to attach to this lead.
+    // Priority: explicit name field from CRM > first template param > existing name > 'Unknown'
+    const bestName = crmLeadName || resolvedTemplateParams?.[0] || '';
 
     if (metaSuccess) {
       await db.saveMessage({ phone: normalizedPhone, role: 'assistant', message: sentContent });
       if (existingLead === undefined) {
         existingLead = await db.getLeadByPhone(normalizedPhone).catch(() => null);
       }
-      if (!existingLead) {
+
+      // Only upsert when we actually need to:
+      //   - new lead → create with bestName (or 'Unknown' as last resort)
+      //   - existing lead whose name is missing/'Unknown' and we now have a real name → update
+      // Avoids bumping message_count on every outbound send.
+      const existingNameIsPlaceholder = existingLead && (!existingLead.name || existingLead.name === 'Unknown');
+      const shouldUpsert = !existingLead || (existingNameIsPlaceholder && bestName);
+
+      if (shouldUpsert) {
+        const upsertName = bestName || (existingLead?.name) || 'Unknown';
         await db.upsertLead({
           phone: normalizedPhone,
-          name: resolvedTemplateParams?.[0] || 'Unknown',
-          score: 3,
-          label: 'COLD',
-          intent: 'general'
-        }).catch(() => {});
+          name: upsertName,
+          score: existingLead?.score ?? 3,
+          label: existingLead?.label || 'COLD',
+          intent: existingLead?.intent || 'general'
+        }).catch((e) => console.warn(`upsertLead skipped: ${e.message}`));
+        console.log(`💾 Lead upserted for ${normalizedPhone} (name="${upsertName}")`);
       }
       console.log(`💾 ${sentVia[0].toUpperCase()}${sentVia.slice(1)} saved to database for ${normalizedPhone}`);
     }
@@ -489,13 +553,21 @@ router.post('/send', async (req, res) => {
     }
 
     if (sendError) {
-      return res.status(200).json({ success: false, error: sendError });
+      // Return 502 Bad Gateway — Meta refused the send. CRM must NOT treat this
+      // as success. Old behaviour returned 200 which masked failures and led to
+      // CRM showing "sent" while no message reached the user.
+      return res.status(502).json({
+        success: false,
+        whatsapp_delivered: false,
+        error: sendError,
+        meta_error: metaErrorDetail
+      });
     }
 
-    res.json({ success: true });
+    res.json({ success: true, whatsapp_delivered: true });
   } catch (e) {
     console.error('💥 SEND Unexpected error:', e.message);
-    res.status(200).json({ success: false, error: e.message });
+    res.status(500).json({ success: false, whatsapp_delivered: false, error: e.message });
   }
 });
 

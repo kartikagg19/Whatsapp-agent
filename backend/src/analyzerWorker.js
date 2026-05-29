@@ -48,17 +48,26 @@ function db() {
 // ── Prompt for the evaluator ───────────────────────────────────────
 // Designed to return a JSON array, one object per exchange, in the
 // same order it received them. Keeps the schema flat and predictable.
-const EVAL_PROMPT = `You are an analytics evaluator for a WhatsApp sales bot working in the Indian real-estate domain. The bot replies in Hinglish (Hindi + English mix). For each exchange below, classify these fields:
+const EVAL_PROMPT = `You are an analytics evaluator for a WhatsApp sales bot working in the Indian real-estate domain. The bot replies in Hinglish (Hindi + English mix). For each exchange below, evaluate BOTH SIDES — the bot AND the customer — so the team can understand customer behaviour, not just bot output.
 
-- sales_stage: one of awareness | interest | qualification | objection | closing | dead
-- sentiment: one of positive | neutral | negative | hostile  (customer's tone toward the bot)
-- objection_type: one of price | location | timing | trust | competitor | none  (if the customer pushed back, what about?)
+For each exchange return an object with these fields:
+
+BOT-SIDE (about the bot's reply):
+- sales_stage: one of awareness | interest | qualification | objection | closing | dead  (the stage of the overall conversation, inferred from context)
 - response_quality_score: integer 1-10 — how well did the bot's reply move the conversation forward?
 - handled: true | false — did the bot's reply actually address what the user asked / move past the objection?
 - issues: array of short tags from this list ONLY: ["robotic","missed_lead_signal","ignored_question","off_topic","over_promised","weak_close","good_handling","strong_close"]
 - improvement_suggestion: one short sentence — what could the bot have said better? Empty string if the reply was good.
 
-Return ONLY a JSON array, one element per exchange, in the same order as input. No prose, no markdown fences.
+CUSTOMER-SIDE (about the user's message — DO NOT confuse with bot judgement):
+- sentiment: one of positive | neutral | negative | hostile  (customer's tone)
+- objection_type: one of price | location | timing | trust | competitor | none
+- customer_intent: one of just_browsing | researching | comparing | ready_to_act | objecting | hostile | other  (what is the customer actually trying to do?)
+- customer_buying_signals: array from this list ONLY: ["mentioned_family","mentioned_budget","asked_possession","asked_loan","asked_amenities","asked_documents","urgency_words","mentioned_visit","specific_unit_interest","price_negotiation"]   (signals the customer dropped; empty array if none)
+- customer_concerns: array from this list ONLY: ["price","location","builder_reputation","possession_delay","loan","documentation","amenities","carpet_area","legal","none"]
+- missed_signal: true | false — did the customer drop a clear buying signal that the bot DID NOT acknowledge or follow up on? Mark true ONLY when there is a concrete signal in the user message that the bot's reply ignores.
+
+Return ONLY a JSON array, one element per exchange, in the same order as input. No prose, no markdown fences. Use empty arrays not null for the array fields when nothing applies.
 
 EXCHANGES:
 `;
@@ -103,9 +112,27 @@ async function evaluateBatch(rows) {
   return parsed;
 }
 
-const ALLOWED_STAGE = new Set(['awareness','interest','qualification','objection','closing','dead']);
-const ALLOWED_SENT  = new Set(['positive','neutral','negative','hostile']);
-const ALLOWED_OBJ   = new Set(['price','location','timing','trust','competitor','none']);
+const ALLOWED_STAGE   = new Set(['awareness','interest','qualification','objection','closing','dead']);
+const ALLOWED_SENT    = new Set(['positive','neutral','negative','hostile']);
+const ALLOWED_OBJ     = new Set(['price','location','timing','trust','competitor','none']);
+const ALLOWED_INTENT  = new Set(['just_browsing','researching','comparing','ready_to_act','objecting','hostile','other']);
+const ALLOWED_SIGNALS = new Set(['mentioned_family','mentioned_budget','asked_possession','asked_loan','asked_amenities','asked_documents','urgency_words','mentioned_visit','specific_unit_interest','price_negotiation']);
+const ALLOWED_CONCERN = new Set(['price','location','builder_reputation','possession_delay','loan','documentation','amenities','carpet_area','legal','none']);
+
+function sanitizeArrayAgainst(arr, allowed, max = 6) {
+  if (!Array.isArray(arr)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const item of arr) {
+    if (typeof item !== 'string') continue;
+    const v = item.trim();
+    if (!allowed.has(v) || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+    if (out.length >= max) break;
+  }
+  return out;
+}
 
 function sanitize(e) {
   if (!e || typeof e !== 'object') return null;
@@ -120,14 +147,25 @@ function sanitize(e) {
   const sug = typeof e.improvement_suggestion === 'string'
     ? e.improvement_suggestion.slice(0, 300)
     : null;
+
+  // Customer-side
+  const intent   = ALLOWED_INTENT.has(e.customer_intent) ? e.customer_intent : null;
+  const signals  = sanitizeArrayAgainst(e.customer_buying_signals, ALLOWED_SIGNALS, 8);
+  const concerns = sanitizeArrayAgainst(e.customer_concerns,       ALLOWED_CONCERN, 6);
+  const missed   = typeof e.missed_signal === 'boolean' ? e.missed_signal : null;
+
   return {
-    sales_stage:            stage,
-    sentiment:              sent,
-    objection_type:         obj,
-    response_quality_score: q,
+    sales_stage:             stage,
+    sentiment:               sent,
+    objection_type:          obj,
+    response_quality_score:  q,
     issues,
     handled,
-    improvement_suggestion: sug
+    improvement_suggestion:  sug,
+    customer_intent:         intent,
+    customer_buying_signals: signals,
+    customer_concerns:       concerns,
+    missed_signal:           missed
   };
 }
 
