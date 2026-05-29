@@ -6,9 +6,11 @@ const express = require('express');
 const cors    = require('cors');
 const morgan  = require('morgan');
 
-const webhookRouter = require('./routes/webhook');
-const adminRouter   = require('./routes/admin');
+const webhookRouter   = require('./routes/webhook');
+const adminRouter     = require('./routes/admin');
+const analyticsRouter = require('./routes/analytics');
 const { startFollowUpScheduler } = require('./followup');
+const { startAnalyzerWorker }    = require('./analyzerWorker');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -34,7 +36,10 @@ app.use('/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
 app.use('/webhook', webhookRouter);
-app.use('/api',     adminRouter);
+// Analytics mounted BEFORE admin so /api/analytics/* never falls through
+// to adminRouter's catch-all 404 handler (if any).
+app.use('/api/analytics', analyticsRouter);
+app.use('/api',           adminRouter);
 
 app.get('/', (req, res) => res.json({
   status:  'online',
@@ -51,4 +56,5 @@ app.listen(PORT, () => {
   console.log(`🔑 Token    : ${process.env.WEBHOOK_VERIFY_TOKEN}`);
   console.log(`🤖 AI Model : Gemini 2.5 Flash\n`);
   startFollowUpScheduler();
+  startAnalyzerWorker();
 });
