@@ -381,6 +381,14 @@ router.get('/export/csv', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/campaigns — list all unique campaign names
+router.get('/campaigns', async (req, res) => {
+  try {
+    const campaigns = await db.getAllCampaigns();
+    res.json({ success: true, data: campaigns });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /api/leads/:phone — single lead + full chat
 router.get('/leads/:phone', async (req, res) => {
   try {
@@ -421,7 +429,9 @@ router.post('/send', async (req, res) => {
       // and as a last-resort fallback for {{1}} when CRM forgets template_params.
       name: bodyName, lead_name: bodyLeadName, contact_name: bodyContactName,
       // Aliases for params/language in case CRM uses unprefixed names.
-      params: bodyParams, language: bodyLanguage
+      params: bodyParams, language: bodyLanguage,
+      // Campaign tag — pass "Day 1", "Day 2" etc. from your CRM
+      campaign
     } = req.body;
     const headerSecret = req.headers['x-webhook-secret'];
     const crmSecret = process.env.CRM_WEBHOOK_SECRET || '';
@@ -622,7 +632,8 @@ router.post('/send', async (req, res) => {
           name: upsertName,
           score: existingLead?.score ?? 3,
           label: existingLead?.label || 'COLD',
-          intent: existingLead?.intent || 'general'
+          intent: existingLead?.intent || 'general',
+          campaign: campaign || undefined
         }).catch((e) => console.warn(`upsertLead skipped: ${e.message}`));
         console.log(`💾 Lead upserted for ${normalizedPhone} (name="${upsertName}")`);
       }
