@@ -56,17 +56,20 @@ NOTE: Files can be PDF OR image (JPEG/PNG) — both are sent automatically. You 
 HOW TO FIND THE FILE:
 Step 1 — Identify the project from context (current conversation or user's explicit mention).
 Step 2 — Scan the KNOWLEDGE BASE for a section that starts with: SENDABLE FILES FOR "[project name]"
+         Use PARTIAL / FUZZY matching: "Krishna Aura" matches "Krishna Aura NX", "Krishna Dharni" matches "Krishna Dharni A1", etc.
 Step 3 — That section lists lines like:   send_document URL for "filename": https://...
 Step 4 — Copy the FULL URL exactly as written (do NOT shorten, modify, or skip it).
 Step 5 — Set "send_document" to that exact URL string.
 
 MATCHING RULES:
 - User says "brochure" → find any file (brochure / sale plan / cost sheet) — send the closest match.
-- User says "floor plan" → send floor plan or unit plan if available, else send any file.
-- User says "images" or "photos" → send the brochure (it contains images).
-- If user does NOT name a project, use the project currently being discussed.
-- If multiple files exist, priority: brochure > sale plan > cost sheet > layout > any other file.
-- NEVER leave send_document null if a file URL exists for the relevant project.
+- User says "floor plan" or "unit plan" → send floor plan or unit plan if available, else send any file.
+- User says "images", "photos", "render", "building photo" → send the JPEG image file.
+- User says "cost sheet" or "price" → send cost sheet PDF.
+- If user does NOT name a project, use the project currently being discussed in conversation.
+- If multiple files exist, priority: brochure > sale plan > cost sheet > floor plan > render image > any other file.
+- PARTIAL NAME MATCH: "Krishna Aura" → look for any project containing "Aura" (Krishna Aura NX).
+- NEVER leave send_document null if ANY file URL exists for the relevant project or a close match.
 - NEVER invent or guess a URL — only use URLs from the KNOWLEDGE BASE.
 
 REPLY MESSAGE RULES (CRITICAL):
