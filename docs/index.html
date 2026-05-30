@@ -640,11 +640,22 @@ const Overview = ({stats,leads,loading,onSelect,isDemo}) => {
 const LeadsPage = ({leads,loading,onSelect,apiBase,isDemo}) => {
   const [search,setSearch]=useState('');
   const [filter,setFilter]=useState('ALL');
+  const [campaign,setCampaign]=useState('ALL');
+  const [campaigns,setCampaigns]=useState([]);
   const [exporting,setExporting]=useState(false);
+
+  useEffect(()=>{
+    if(isDemo||!apiBase||apiBase==='DEMO')return;
+    apiFetch(`${apiBase}/campaigns`).then(r=>r.json()).then(d=>{
+      if(d.success) setCampaigns(d.data||[]);
+    }).catch(()=>{});
+  },[apiBase,isDemo]);
+
   const visible=leads.filter(l=>{
     const fm=filter==='ALL'||l.label===filter;
+    const cm=campaign==='ALL'||(l.campaign||'')=== campaign||(!l.campaign&&campaign==='(none)');
     const sm=!search||(l.name||'').toLowerCase().includes(search.toLowerCase())||(l.phone||'').includes(search);
-    return fm&&sm;
+    return fm&&cm&&sm;
   });
   const counts={ALL:leads.length,HOT:leads.filter(l=>l.label==='HOT').length,WARM:leads.filter(l=>l.label==='WARM').length,COLD:leads.filter(l=>l.label==='COLD').length};
 
@@ -696,31 +707,50 @@ const LeadsPage = ({leads,loading,onSelect,apiBase,isDemo}) => {
               `${k==='ALL'?'All':k} (${counts[k]})`)
           )
         ),
-        h('div',{className:'inp-wrap',style:{width:'200px'}},
+        campaigns.length>0&&h('select',{
+          value:campaign,onChange:e=>setCampaign(e.target.value),
+          style:{fontSize:'12px',padding:'4px 8px',borderRadius:'var(--r)',border:'1px solid var(--border2)',
+            background:'var(--surface)',color:'var(--text2)',fontFamily:'var(--mono)',cursor:'pointer',height:'28px'}
+        },
+          h('option',{value:'ALL'},'All Campaigns'),
+          campaigns.map(c=>h('option',{key:c,value:c},c))
+        ),
+        h('div',{className:'inp-wrap',style:{width:'180px'}},
           h('i',{className:'ti ti-search'}),
           h('input',{value:search,onChange:e=>setSearch(e.target.value),placeholder:'Search name or phone...'})
         ),
         h('button',{className:'btn btn-ghost btn-sm',onClick:exportLeadsOnly,disabled:leads.length===0,title:'Download leads summary (no chat history)'},
           h('i',{className:'ti ti-table-export'}),' Export Leads'),
-        h('button',{className:'btn btn-primary btn-sm',onClick:exportWithChats,disabled:leads.length===0,title:'Download leads + full conversation history (1 row per person)'},
-          h('i',{className:'ti ti-message-report'}),' Export with Chats'),
-        !isDemo&&apiBase&&apiBase!=='DEMO'?h('a',{href:apiBase+'/export/csv',target:'_blank',className:'btn btn-sm',style:{background:'#16a34a',color:'#fff',textDecoration:'none'},title:'Direct download - always works'},
-          h('i',{className:'ti ti-download'}),' Direct Download'):null
+        h('button',{className:'btn btn-primary btn-sm',onClick:exportWithChats,disabled:exporting||leads.length===0,title:'Download leads + full conversation history'},
+          exporting?h(Spinner):h('i',{className:'ti ti-message-report'}),' ',exporting?'Exporting...':'Export with Chats')
       )
+    ),
+    campaigns.length>0&&campaign!=='ALL'&&h('div',{style:{
+      padding:'8px 16px',background:'#EFF6FF',borderBottom:'1px solid #BFDBFE',
+      fontSize:'12px',color:'#1D4ED8',display:'flex',alignItems:'center',gap:'6px'
+    }},
+      h('i',{className:'ti ti-flag'}),
+      h('strong',null,campaign),
+      ` — ${visible.length} lead${visible.length!==1?'s':''}`,
+      h('button',{onClick:()=>setCampaign('ALL'),style:{marginLeft:'auto',background:'none',border:'none',color:'#1D4ED8',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)'}},
+        'Clear filter ×')
     ),
     loading?h('div',{className:'empty',style:{padding:'56px'}},h(Spinner)):
     visible.length===0?h('div',{className:'empty',style:{padding:'56px'}},h('i',{className:'ti ti-users-off'}),h('p',null,'No leads found')):
     h('div',{className:'tbl-wrap'},
       h('table',null,
-        h('thead',null,h('tr',null,['Name','Phone','Score','Status','Intent','Msgs','First Seen','Last Active'].map(c=>h('th',{key:c},c)))),
+        h('thead',null,h('tr',null,['Name','Phone','Score','Status','Campaign','Intent','Msgs','Last Active'].map(c=>h('th',{key:c},c)))),
         h('tbody',null,visible.map(l=>h('tr',{key:l.id,onClick:()=>onSelect(l)},
           h('td',{className:'td-name'},l.name),
           h('td',{style:{fontFamily:'var(--mono)',fontSize:'11px',color:'var(--text3)'}},l.phone),
           h('td',null,h(ScoreBar,{score:l.score})),
           h('td',null,h(Badge,{label:l.label})),
+          h('td',null,l.campaign
+            ?h('span',{style:{fontSize:'11px',fontWeight:'600',padding:'2px 7px',borderRadius:'4px',background:'#EFF6FF',color:'#1D4ED8',border:'1px solid #BFDBFE',fontFamily:'var(--mono)'}},l.campaign)
+            :h('span',{style:{color:'var(--text3)',fontSize:'11px'}},'-')
+          ),
           h('td',null,(l.intent||'general').replace('_',' ')),
           h('td',{style:{fontFamily:'var(--mono)',color:'var(--text3)'}},l.message_count||0),
-          h('td',{style:{color:'var(--text3)'}},fmt(l.created_at)),
           h('td',{style:{color:'var(--text3)'}},ago(l.last_message))
         )))
       )
@@ -874,7 +904,8 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
     try{
       const r=await apiFetch(`${apiBase}/agent-settings`,{method:'POST',body:JSON.stringify(s)});
       const d=await r.json();
-      if(d.success)showToast('Settings saved — bot updated','success');
+      if(d.success&&d.persisted_to_db===false)showToast('Saved locally only — run app_settings SQL in Supabase to persist','err');
+      else if(d.success)showToast('Settings saved — bot updated','success');
       else showToast(d.error||'Save failed','err');
     }catch{showToast('Cannot reach backend','err');}
     setSaving(false);
@@ -1810,6 +1841,308 @@ function metricCard(label, value, sub, tone) {
   );
 }
 
+/* ─── CAMPAIGNS PAGE ─────────────────────────────────────────── */
+const CampaignsPage = ({leads,loading,onSelect,isDemo,apiBase,onRefresh}) => {
+  const [selected,setSelectedCamp]=useState(null);
+  const [renaming,setRenaming]=useState(null);
+  const [assigning,setAssigning]=useState(false);
+  const [assignName,setAssignName]=useState('');
+  const [assignMode,setAssignMode]=useState('all');   // 'all' | 'date'
+  const [assignDate,setAssignDate]=useState('');
+  const [dateCounts,setDateCounts]=useState([]);
+  const [busy,setBusy]=useState(false);
+
+  const groups = {};
+  for(const l of leads){
+    const key = l.campaign || '(No Campaign)';
+    if(!groups[key]) groups[key]={name:key,leads:[],hot:0,warm:0,cold:0,total:0};
+    groups[key].leads.push(l);
+    groups[key].total++;
+    if(l.label==='HOT')  groups[key].hot++;
+    else if(l.label==='WARM') groups[key].warm++;
+    else groups[key].cold++;
+  }
+  const sortedGroups = Object.values(groups).sort((a,b)=>{
+    if(a.name==='(No Campaign)') return 1;
+    if(b.name==='(No Campaign)') return -1;
+    return a.name.localeCompare(b.name);
+  });
+
+  const campLeads = selected
+    ? (groups[selected]?.leads||[]).sort((a,b)=>new Date(b.last_message)-new Date(a.last_message))
+    : [];
+
+  async function doRename(){
+    if(!renaming?.to?.trim()||busy) return;
+    setBusy(true);
+    try{
+      const r=await apiFetch(`${apiBase}/campaigns/rename`,{method:'POST',body:JSON.stringify({from:renaming.from,to:renaming.to.trim()})});
+      const d=await r.json();
+      if(d.success){
+        if(selected===renaming.from) setSelectedCamp(renaming.to.trim());
+        setRenaming(null);
+        onRefresh && onRefresh();
+      }
+    }catch(e){alert('Rename failed: '+e.message);}
+    setBusy(false);
+  }
+
+  async function openAssign(){
+    setAssigning(true);
+    // Load date preview
+    if(apiBase&&apiBase!=='DEMO'){
+      try{
+        const r=await apiFetch(`${apiBase}/campaigns/date-preview`);
+        const d=await r.json();
+        if(d.success) setDateCounts(d.data||[]);
+      }catch{}
+    }
+  }
+
+  async function doAssign(){
+    if(!assignName.trim()||busy) return;
+    setBusy(true);
+    try{
+      const body = assignMode==='date'&&assignDate
+        ? {campaign:assignName.trim(), from_date:assignDate, to_date:assignDate}
+        : {campaign:assignName.trim(), all_unassigned:true};
+      const r=await apiFetch(`${apiBase}/campaigns/assign`,{method:'POST',body:JSON.stringify(body)});
+      const d=await r.json();
+      if(d.success){
+        setAssigning(false); setAssignName(''); setAssignDate(''); setAssignMode('all');
+        onRefresh && onRefresh();
+      }
+    }catch(e){alert('Assign failed: '+e.message);}
+    setBusy(false);
+  }
+
+  if(loading) return h('div',{className:'empty'},h(Spinner));
+
+  // ── RENAME MODAL ──────────────────────────────────────────────
+  const renameModal = renaming && h('div',{className:'overlay',onClick:e=>e.target===e.currentTarget&&setRenaming(null)},
+    h('div',{className:'modal',style:{maxWidth:'420px'}},
+      h('div',{className:'modal-hd'},
+        h('div',null,
+          h('div',{className:'modal-hd-title'},'Rename Campaign'),
+          h('div',{className:'modal-hd-sub'},`All leads in "${renaming.from}" will be updated`)
+        ),
+        h('button',{className:'x-btn',onClick:()=>setRenaming(null)},h('i',{className:'ti ti-x'}))
+      ),
+      h('div',{className:'modal-bd'},
+        h('div',{className:'form-field'},
+          h('label',{className:'form-label'},'New Campaign Name'),
+          h('input',{
+            value:renaming.to, autoFocus:true,
+            onChange:e=>setRenaming(r=>({...r,to:e.target.value})),
+            onKeyDown:e=>e.key==='Enter'&&doRename(),
+            placeholder:'e.g. Day 1 — May 2025'
+          })
+        )
+      ),
+      h('div',{className:'modal-ft'},
+        h('button',{className:'btn btn-ghost',onClick:()=>setRenaming(null)},'Cancel'),
+        h('button',{className:'btn btn-primary',onClick:doRename,disabled:busy||!renaming.to?.trim()},
+          busy?h(Spinner):h('i',{className:'ti ti-check'}),' Rename')
+      )
+    )
+  );
+
+  // ── ASSIGN MODAL ──────────────────────────────────────────────
+  const untaggedTotal = groups['(No Campaign)']?.total || 0;
+  const previewCount = assignMode==='date'&&assignDate
+    ? (dateCounts.find(d=>d.date===assignDate)?.count||0)
+    : untaggedTotal;
+
+  const assignModal = assigning && h('div',{className:'overlay',onClick:e=>e.target===e.currentTarget&&setAssigning(false)},
+    h('div',{className:'modal',style:{maxWidth:'500px'}},
+      h('div',{className:'modal-hd'},
+        h('div',null,
+          h('div',{className:'modal-hd-title'},'Assign Campaign Name'),
+          h('div',{className:'modal-hd-sub'},`${untaggedTotal} untagged leads — split them by date`)
+        ),
+        h('button',{className:'x-btn',onClick:()=>setAssigning(false)},h('i',{className:'ti ti-x'}))
+      ),
+      h('div',{className:'modal-bd'},
+        // Mode toggle
+        h('div',{style:{display:'flex',gap:'8px',marginBottom:'16px'}},
+          ['all','date'].map(m=>h('button',{key:m,
+            className:`btn btn-sm ${assignMode===m?'btn-primary':'btn-ghost'}`,
+            onClick:()=>setAssignMode(m)
+          }, m==='all'?'Assign All Untagged':'Assign by Specific Date'))
+        ),
+
+        assignMode==='date'&&h('div',null,
+          // Date breakdown table
+          dateCounts.length>0&&h('div',{style:{marginBottom:'14px'}},
+            h('div',{className:'form-label',style:{marginBottom:'6px'}},'Leads per day (untagged)'),
+            h('div',{style:{background:'var(--surface2)',borderRadius:'var(--r)',border:'1px solid var(--border)',overflow:'hidden'}},
+              dateCounts.map((d,i)=>h('div',{key:d.date,
+                onClick:()=>setAssignDate(d.date),
+                style:{
+                  display:'flex',alignItems:'center',justifyContent:'space-between',
+                  padding:'8px 13px',cursor:'pointer',fontSize:'13px',
+                  background:assignDate===d.date?'var(--accent-sub)':'transparent',
+                  borderBottom:i<dateCounts.length-1?'1px solid var(--border)':'none'
+                }
+              },
+                h('span',{style:{fontFamily:'var(--mono)',color:assignDate===d.date?'var(--text1)':'var(--text2)'}},d.date),
+                h('span',{style:{fontFamily:'var(--mono)',fontWeight:'600',color:assignDate===d.date?'var(--text1)':'var(--text3)'}},`${d.count} leads`)
+              ))
+            )
+          ),
+          h('div',{className:'form-field',style:{marginBottom:0}},
+            h('label',{className:'form-label'},'Select Date'),
+            h('input',{type:'date',value:assignDate,onChange:e=>setAssignDate(e.target.value)})
+          )
+        ),
+
+        h('div',{className:'form-field',style:{marginTop:'14px',marginBottom:0}},
+          h('label',{className:'form-label'},
+            assignMode==='date'&&assignDate
+              ? `Campaign name for ${assignDate} (${previewCount} leads)`
+              : `Campaign name for all ${untaggedTotal} untagged leads`
+          ),
+          h('input',{
+            value:assignName, autoFocus:assignMode==='all',
+            onChange:e=>setAssignName(e.target.value),
+            onKeyDown:e=>e.key==='Enter'&&doAssign(),
+            placeholder:'e.g. Day 1'
+          })
+        )
+      ),
+      h('div',{className:'modal-ft'},
+        h('button',{className:'btn btn-ghost',onClick:()=>setAssigning(false)},'Cancel'),
+        h('button',{
+          className:'btn btn-primary',onClick:doAssign,
+          disabled:busy||!assignName.trim()||(assignMode==='date'&&!assignDate)
+        },
+          busy?h(Spinner):h('i',{className:'ti ti-tag'}),
+          ` Assign ${previewCount} leads`)
+      )
+    )
+  );
+
+  if(sortedGroups.length===0||(!isDemo&&leads.length===0)) return h('div',null,
+    renameModal, assignModal,
+    h('div',{className:'card'},
+      h('div',{className:'card-bd'},
+        h('div',{className:'empty'},
+          h('i',{className:'ti ti-flag',style:{fontSize:'28px',color:'var(--border2)'}}),
+          h('p',null,'No campaigns yet. Add a "campaign" field to your CRM POST body to start tracking.'),
+          h('div',{style:{fontFamily:'var(--mono)',fontSize:'11px',color:'var(--text3)',marginTop:'8px',background:'var(--surface2)',padding:'8px 12px',borderRadius:'var(--r)',display:'inline-block'}},
+            '{ "phone": "91...", "message": "...", "campaign": "Day 1" }')
+        )
+      )
+    )
+  );
+
+  // ── CARD LIST ─────────────────────────────────────────────────
+  if(!selected) return h('div',null,
+    renameModal, assignModal,
+    h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:'12px'}},
+      sortedGroups.map(g=>{
+        const isNone = g.name==='(No Campaign)';
+        return h('div',{
+          key:g.name,
+          style:{background:'var(--surface)',border:`1px solid ${isNone?'var(--border2)':'var(--border)'}`,
+            borderRadius:'var(--r2)',padding:'18px 20px',cursor:'pointer',
+            boxShadow:'var(--sh)',transition:'all 0.12s',position:'relative'},
+          onClick:()=>setSelectedCamp(g.name),
+          onMouseEnter:e=>{e.currentTarget.style.boxShadow='var(--sh2)';e.currentTarget.style.transform='translateY(-2px)'},
+          onMouseLeave:e=>{e.currentTarget.style.boxShadow='var(--sh)';e.currentTarget.style.transform='none'}
+        },
+          h('div',{style:{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:'14px'}},
+            h('div',{style:{display:'flex',alignItems:'center',gap:'8px'}},
+              h('div',{style:{width:'28px',height:'28px',background:isNone?'var(--surface3)':'#EFF6FF',borderRadius:'6px',display:'flex',alignItems:'center',justifyContent:'center'}},
+                h('i',{className:`ti ${isNone?'ti-tag':'ti-flag'}`,style:{fontSize:'14px',color:isNone?'var(--text3)':'#1D4ED8'}})
+              ),
+              h('span',{style:{fontWeight:'600',fontSize:'14px',color:isNone?'var(--text3)':'var(--text1)',letterSpacing:'-0.2px'}},g.name)
+            ),
+            h('div',{style:{display:'flex',alignItems:'center',gap:'6px'}},
+              h('span',{style:{fontFamily:'var(--mono)',fontSize:'20px',fontWeight:'700',color:'var(--text1)'}},g.total),
+              // Edit/Assign button — stop propagation so card click doesn't fire
+              !isDemo&&apiBase&&apiBase!=='DEMO'&&h('button',{
+                className:'btn btn-ghost btn-sm',
+                style:{padding:'3px 7px',fontSize:'11px'},
+                onClick:e=>{e.stopPropagation(); isNone?openAssign():setRenaming({from:g.name,to:g.name});},
+                title:isNone?'Assign campaign name':'Rename campaign'
+              },h('i',{className:`ti ${isNone?'ti-tag':'ti-pencil'}`}))
+            )
+          ),
+          h('div',{style:{display:'flex',gap:'6px',marginBottom:'12px'}},
+            [['HOT',g.hot,'var(--hot)','var(--hot-bg)','var(--hot-br)'],
+             ['WARM',g.warm,'var(--warm)','var(--warm-bg)','var(--warm-br)'],
+             ['COLD',g.cold,'var(--cold)','var(--cold-bg)','var(--cold-br)']
+            ].map(([l,v,c,bg,br])=>v>0&&h('span',{key:l,style:{
+              fontSize:'11px',fontWeight:'600',padding:'2px 8px',borderRadius:'4px',
+              background:`${bg}`,color:`${c}`,border:`1px solid ${br}`,fontFamily:'var(--mono)'
+            }},`${l} ${v}`))
+          ),
+          h('div',{style:{height:'4px',background:'var(--surface3)',borderRadius:'2px',overflow:'hidden'}},
+            h('div',{style:{height:'4px',borderRadius:'2px',width:'100%',
+              background:`linear-gradient(to right,var(--hot) ${g.hot/g.total*100}%,var(--warm) ${g.hot/g.total*100}% ${(g.hot+g.warm)/g.total*100}%,var(--cold) ${(g.hot+g.warm)/g.total*100}%)`}})
+          ),
+          h('div',{style:{marginTop:'8px',fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)'}},
+            `${Math.round(g.hot/g.total*100)}% hot · ${Math.round(g.warm/g.total*100)}% warm`)
+        );
+      })
+    )
+  );
+
+  // ── DETAIL VIEW ───────────────────────────────────────────────
+  const camp = groups[selected];
+  const isNoneDetail = selected==='(No Campaign)';
+  return h('div',null,
+    renameModal, assignModal,
+    h('div',{style:{display:'flex',alignItems:'center',gap:'10px',marginBottom:'18px'}},
+      h('button',{className:'btn btn-ghost btn-sm',onClick:()=>setSelectedCamp(null)},
+        h('i',{className:'ti ti-arrow-left'}),' All Campaigns'),
+      h('div',{style:{width:'1px',height:'20px',background:'var(--border)'}}),
+      h('div',{style:{display:'flex',alignItems:'center',gap:'8px',flex:1}},
+        h('i',{className:'ti ti-flag',style:{color:'#1D4ED8'}}),
+        h('span',{style:{fontWeight:'600',fontSize:'15px',color:'var(--text1)'}},selected)
+      ),
+      !isDemo&&apiBase&&apiBase!=='DEMO'&&h('button',{
+        className:'btn btn-ghost btn-sm',
+        onClick:()=>isNoneDetail?setAssigning(true):setRenaming({from:selected,to:selected})
+      },h('i',{className:`ti ${isNoneDetail?'ti-tag':'ti-pencil'}`}),isNoneDetail?' Assign Name':' Rename')
+    ),
+    h('div',{style:{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'10px',marginBottom:'18px'}},
+      [{label:'Total Leads',val:camp.total,color:'var(--text1)'},
+       {label:'Hot Leads',  val:camp.hot,  color:'var(--hot)'},
+       {label:'Warm Leads', val:camp.warm, color:'var(--warm)'},
+       {label:'Cold Leads', val:camp.cold, color:'var(--cold)'},
+      ].map(s=>h('div',{key:s.label,className:'stat'},
+        h('div',{className:'stat-label'},s.label),
+        h('div',{className:'stat-val',style:{color:s.color,fontSize:'24px'}},s.val),
+        h('div',{className:'stat-meta'},`${s.val>0?Math.round(s.val/camp.total*100):0}% of campaign`)
+      ))
+    ),
+    h('div',{className:'card'},
+      h('div',{className:'card-hd'},
+        h('span',{className:'card-title'},`${selected} — ${camp.leads.length} leads`),
+        h('div',{style:{display:'flex',gap:'6px'}},
+          ['HOT','WARM','COLD'].map(lbl=>h('span',{key:lbl,className:`badge b-${lbl.toLowerCase()}`},
+            `${lbl} ${camp.leads.filter(l=>l.label===lbl).length}`)))
+      ),
+      h('div',{className:'tbl-wrap'},
+        h('table',null,
+          h('thead',null,h('tr',null,['Name','Phone','Score','Status','Intent','Msgs','Last Active'].map(c=>h('th',{key:c},c)))),
+          h('tbody',null,campLeads.map(l=>h('tr',{key:l.id,onClick:()=>onSelect(l),style:{cursor:'pointer'}},
+            h('td',{className:'td-name'},l.name),
+            h('td',{style:{fontFamily:'var(--mono)',fontSize:'11px',color:'var(--text3)'}},l.phone),
+            h('td',null,h(ScoreBar,{score:l.score})),
+            h('td',null,h(Badge,{label:l.label})),
+            h('td',null,(l.intent||'general').replace('_',' ')),
+            h('td',{style:{fontFamily:'var(--mono)',color:'var(--text3)'}},l.message_count||0),
+            h('td',{style:{color:'var(--text3)'}},ago(l.last_message))
+          )))
+        )
+      )
+    )
+  );
+};
+
 /* ─── APP ROOT ────────────────────────────────────────────────── */
 function App(){
   const savedApi=localStorage.getItem('pa_api');
@@ -1855,6 +2188,7 @@ function App(){
     {key:'overview',      icon:'ti-layout-dashboard',label:'Overview'},
     {key:'pipeline',      icon:'ti-layout-kanban',   label:'Pipeline'},
     {key:'leads',         icon:'ti-users',            label:'All Leads',badge:hotCount||null},
+    {key:'campaigns',     icon:'ti-flag',             label:'Campaigns'},
     {key:'agent-settings',icon:'ti-robot',            label:'Agent Settings'},
     {key:'costs',         icon:'ti-currency-rupee',   label:'Cost Analytics'},
     {key:'campaign-intel',icon:'ti-chart-pie',        label:'Campaign Intel'},
@@ -1863,6 +2197,7 @@ function App(){
     overview:        {title:'Overview',       sub:'Real-time lead pipeline'},
     pipeline:        {title:'Pipeline',       sub:'Leads by stage'},
     leads:           {title:'All Leads',      sub:`${leads.length} total`},
+    campaigns:       {title:'Campaigns',      sub:'Day-wise campaign analysis'},
     'agent-settings':{title:'Agent Settings', sub:'Configure your AI bot'},
     costs:           {title:'Cost Analytics', sub:'Token usage & spend per conversation'},
     'campaign-intel':{title:'Campaign Intelligence', sub:'Bot performance, issues, and review queue'},
@@ -1922,6 +2257,7 @@ function App(){
         page==='overview'       ?h(Overview,         {stats,leads,loading,onSelect:setSelected,isDemo}):
         page==='pipeline'       ?h(PipelinePage,     {leads,loading,onSelect:setSelected}):
         page==='leads'          ?h(LeadsPage,        {leads,loading,onSelect:setSelected,apiBase,isDemo}):
+        page==='campaigns'      ?h(CampaignsPage,    {leads,loading,onSelect:setSelected,isDemo,apiBase,onRefresh:fetchData}):
         page==='agent-settings' ?h(AgentSettingsPage,{apiBase,isDemo,showToast}):
         page==='costs'          ?h(CostsPage,        {apiBase,isDemo}):
         page==='campaign-intel' ?h(CampaignIntelPage,{apiBase,isDemo,showToast}):null
