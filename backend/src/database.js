@@ -299,4 +299,4 @@ async function saveAppSettings(settingsObj) {
   if (error) throw error;
 }
 
-module.exports = { upsertLead, getAllLeads, getLeadByPhone, getStats, getAllCampaigns, saveMessage, getHistory, getConversations, hasInboundFromPhone, getKnowledgeBase, addKnowledge, deleteKnowledge, getKnowledgeText, uploadToStorage, getLeadsForFollowUp, markFollowUpSent, getCostStats, getAppSettings, saveAppSettings };
+module.exports = { getDB, upsertLead, getAllLeads, getLeadByPhone, getStats, getAllCampaigns, saveMessage, getHistory, getConversations, hasInboundFromPhone, getKnowledgeBase, addKnowledge, deleteKnowledge, getKnowledgeText, uploadToStorage, getLeadsForFollowUp, markFollowUpSent, getCostStats, getAppSettings, saveAppSettings };

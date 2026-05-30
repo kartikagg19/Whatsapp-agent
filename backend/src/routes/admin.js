@@ -389,6 +389,41 @@ router.get('/campaigns', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// POST /api/campaigns/rename — rename a campaign (updates all leads)
+// Body: { from: "old name", to: "new name" }
+router.post('/campaigns/rename', async (req, res) => {
+  try {
+    const { from, to } = req.body;
+    if (!from || !to) return res.status(400).json({ error: 'from and to required' });
+    const { error, count } = await db.getDB()
+      .from('leads')
+      .update({ campaign: to.trim() })
+      .eq('campaign', from.trim());
+    if (error) throw error;
+    res.json({ success: true, updated: count });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/campaigns/assign — assign campaign to specific phones OR all leads with no campaign
+// Body: { campaign: "Day 1", phones: ["91...","91..."] } OR { campaign: "Day 1", all_unassigned: true }
+router.post('/campaigns/assign', async (req, res) => {
+  try {
+    const { campaign, phones, all_unassigned } = req.body;
+    if (!campaign) return res.status(400).json({ error: 'campaign required' });
+    let query = db.getDB().from('leads').update({ campaign: campaign.trim() });
+    if (all_unassigned) {
+      query = query.or('campaign.is.null,campaign.eq.');
+    } else if (phones && phones.length > 0) {
+      query = query.in('phone', phones);
+    } else {
+      return res.status(400).json({ error: 'phones array or all_unassigned required' });
+    }
+    const { error, count } = await query;
+    if (error) throw error;
+    res.json({ success: true, updated: count });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /api/leads/:phone — single lead + full chat
 router.get('/leads/:phone', async (req, res) => {
   try {
