@@ -68,8 +68,12 @@ MATCHING RULES:
 - NEVER leave send_document null if a file URL exists for the relevant project.
 - NEVER invent or guess a URL — only use URLs from the KNOWLEDGE BASE.
 
-REPLY MESSAGE:
-Always tell the user what you are sending. Example: "Yeh lo Krishna Veer ka brochure! 📄"
+REPLY MESSAGE RULES (CRITICAL):
+- Write a short natural WhatsApp message telling the user the file is coming.
+- Example: "Yeh lo Krishna Veer ka brochure! 📄"
+- NEVER include placeholders like [ATTACH_DOC:...], [FILE:...], [DOC:...], or ANY bracket notation in reply_message.
+- NEVER mention the filename or URL in the reply_message text.
+- The backend sends the actual file automatically — your reply_message is ONLY the chat text.
 `;
 
 // Generic NEPQ-based system prompt — project-specific KB lives in the knowledge_base table.
