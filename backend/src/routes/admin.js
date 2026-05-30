@@ -405,22 +405,53 @@ router.post('/campaigns/rename', async (req, res) => {
 });
 
 // POST /api/campaigns/assign — assign campaign to specific phones OR all leads with no campaign
-// Body: { campaign: "Day 1", phones: ["91...","91..."] } OR { campaign: "Day 1", all_unassigned: true }
+// Body: { campaign: "Day 1", phones: [...] } OR { campaign: "Day 1", all_unassigned: true }
+//       OR { campaign: "Day 1", from_date: "2025-05-29", to_date: "2025-05-29" }
 router.post('/campaigns/assign', async (req, res) => {
   try {
-    const { campaign, phones, all_unassigned } = req.body;
+    const { campaign, phones, all_unassigned, from_date, to_date } = req.body;
     if (!campaign) return res.status(400).json({ error: 'campaign required' });
+
     let query = db.getDB().from('leads').update({ campaign: campaign.trim() });
-    if (all_unassigned) {
+
+    if (from_date || to_date) {
+      // Assign by date range based on created_at
+      query = query.or('campaign.is.null,campaign.eq.');
+      if (from_date) query = query.gte('created_at', from_date + 'T00:00:00.000Z');
+      if (to_date)   query = query.lte('created_at', to_date   + 'T23:59:59.999Z');
+    } else if (all_unassigned) {
       query = query.or('campaign.is.null,campaign.eq.');
     } else if (phones && phones.length > 0) {
       query = query.in('phone', phones);
     } else {
-      return res.status(400).json({ error: 'phones array or all_unassigned required' });
+      return res.status(400).json({ error: 'phones, all_unassigned, or from_date/to_date required' });
     }
+
     const { error, count } = await query;
     if (error) throw error;
     res.json({ success: true, updated: count });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/campaigns/date-preview — count unassigned leads per date (helps plan campaign splits)
+router.get('/campaigns/date-preview', async (req, res) => {
+  try {
+    const { data, error } = await db.getDB()
+      .from('leads')
+      .select('created_at')
+      .or('campaign.is.null,campaign.eq.')
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    // Group by date
+    const counts = {};
+    for (const row of (data || [])) {
+      const d = (row.created_at || '').slice(0, 10);
+      if (d) counts[d] = (counts[d] || 0) + 1;
+    }
+    const result = Object.entries(counts)
+      .sort(([a],[b]) => a.localeCompare(b))
+      .map(([date, count]) => ({ date, count }));
+    res.json({ success: true, data: result });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
