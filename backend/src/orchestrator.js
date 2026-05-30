@@ -335,8 +335,9 @@ async function sendDocumentSafe(phone, url) {
     await sendDocument(phone, url, docName, '');
     console.log(`📎 Document sent: ${docName}`);
   } catch (e) {
-    console.warn('⚠️ Document send failed, sending link as text:', e.message);
-    await sendText(phone, `📎 ${docName}\n\nYahan se download karein:\n${url}`).catch(() => {});
+    console.warn('⚠️ Document send failed:', e.message);
+    // Don't expose the raw storage URL — send a clean follow-up instead
+    await sendText(phone, 'Ek second ji, file bhejne mein thoda issue aa gaya. Main abhi team ko forward kar rahi hoon, wo aapko file share karenge jaldi. 🙏').catch(() => {});
   }
 }
 
