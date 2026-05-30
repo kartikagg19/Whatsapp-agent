@@ -1096,6 +1096,24 @@ router.post('/knowledge/project', upload.array('files', 50), async (req, res) =>
   res.json({ success: true, uploaded: results.length, errors, data: results });
 });
 
+// POST /api/knowledge/add-url — save a file URL directly (file already on storage)
+// Body: { name, file_url, file_type, project_group, content }
+router.post('/knowledge/add-url', async (req, res) => {
+  try {
+    const { name, file_url, file_type, project_group, content } = req.body;
+    if (!name || !file_url) return res.status(400).json({ error: 'name and file_url required' });
+    const doc = await db.addKnowledge({
+      name,
+      content: content || `[${file_type || 'file'}: ${name}]`,
+      file_type: file_type || 'file',
+      size_chars: (content || '').length,
+      file_url,
+      project_group: project_group || null
+    });
+    res.json({ success: true, data: doc });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // DELETE /api/knowledge/:id
 router.delete('/knowledge/:id', async (req, res) => {
   try {
