@@ -1038,8 +1038,10 @@ router.post('/knowledge/project', upload.array('files', 50), async (req, res) =>
     try {
       const fileBuffer = fs.readFileSync(tempPath);
       const name      = file.originalname;
-      const isJson    = name.toLowerCase().endsWith('.json') || file.mimetype === 'application/json';
-      const isPdf     = file.mimetype === 'application/pdf'  || name.toLowerCase().endsWith('.pdf');
+      const nameL     = name.toLowerCase();
+      const isJson    = nameL.endsWith('.json') || file.mimetype === 'application/json';
+      const isPdf     = file.mimetype === 'application/pdf' || nameL.endsWith('.pdf');
+      const isImage   = /\.(jpe?g|png|gif|webp|bmp)$/.test(nameL) || file.mimetype.startsWith('image/');
 
       let content = '', file_url = null, fileType = 'text';
 
@@ -1050,18 +1052,33 @@ router.post('/knowledge/project', upload.array('files', 50), async (req, res) =>
           errors.push({ name, error: 'Invalid JSON — skipped' }); continue;
         }
       } else if (isPdf) {
-        const parsed = await pdfParse(fileBuffer);
-        content  = parsed.text;
         fileType = 'pdf';
         try {
+          const parsed = await pdfParse(fileBuffer);
+          content = parsed.text || '';
+        } catch { content = ''; }
+        try {
           file_url = await db.uploadToStorage(`${project_group}/${name}`, fileBuffer, 'application/pdf');
-        } catch (e) { console.warn('Storage upload failed:', e.message); }
+          console.log(`☁️  PDF uploaded: ${file_url}`);
+        } catch (e) { console.warn('PDF storage upload failed:', e.message); }
+      } else if (isImage) {
+        // Images: upload to storage so they can be sent via WhatsApp, no text needed
+        fileType = 'image';
+        const imgMime = file.mimetype || (nameL.endsWith('.png') ? 'image/png' : 'image/jpeg');
+        try {
+          file_url = await db.uploadToStorage(`${project_group}/${name}`, fileBuffer, imgMime);
+          console.log(`☁️  Image uploaded: ${file_url}`);
+          content = `[Image file: ${name}]`; // placeholder so the not-empty check passes
+        } catch (e) {
+          errors.push({ name, error: 'Image upload failed: ' + e.message }); continue;
+        }
       } else {
         content  = fileBuffer.toString('utf8');
         fileType = 'text';
       }
 
-      if (!content.trim()) { errors.push({ name, error: 'Empty content — skipped' }); continue; }
+      // Skip only if there is truly no content AND no file URL
+      if (!content.trim() && !file_url) { errors.push({ name, error: 'Empty content — skipped' }); continue; }
 
       const doc = await db.addKnowledge({
         name, content: content.trim(), file_type: fileType,
