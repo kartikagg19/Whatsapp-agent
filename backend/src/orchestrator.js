@@ -28,7 +28,7 @@
 const fs   = require('fs');
 const path = require('path');
 const { getAIReply, getLeadLabel } = require('./ai');
-const { sendText, sendDocument, sendButtons, alertSales } = require('./whatsapp');
+const { sendText, sendImage, sendDocument, sendButtons, alertSales, isImageUrl } = require('./whatsapp');
 const { syncTimeline } = require('./crmClient');
 const { splitReply } = require('./chunker');
 const { analyzeExchange } = require('./analyzer');
@@ -330,14 +330,18 @@ async function runPipeline(phone, buf) {
 }
 
 async function sendDocumentSafe(phone, url) {
-  const docName = decodeURIComponent(url.split('/').pop()) || 'document.pdf';
+  const docName = decodeURIComponent(url.split('/').pop()) || 'document';
   try {
-    await sendDocument(phone, url, docName, '');
-    console.log(`📎 Document sent: ${docName}`);
+    if (isImageUrl(url)) {
+      await sendImage(phone, url, '');
+      console.log(`🖼️ Image sent: ${docName}`);
+    } else {
+      await sendDocument(phone, url, docName, '');
+      console.log(`📎 Document sent: ${docName}`);
+    }
   } catch (e) {
-    console.warn('⚠️ Document send failed:', e.message);
-    // Don't expose the raw storage URL — send a clean follow-up instead
-    await sendText(phone, 'Ek second ji, file bhejne mein thoda issue aa gaya. Main abhi team ko forward kar rahi hoon, wo aapko file share karenge jaldi. 🙏').catch(() => {});
+    console.warn('⚠️ File send failed:', e.message);
+    await sendText(phone, 'Ek second ji, file bhejne mein thoda issue aa gaya. Main abhi team ko forward kar rahi hoon, wo aapko jaldi share karenge. 🙏').catch(() => {});
   }
 }
 

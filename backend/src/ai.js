@@ -49,8 +49,9 @@ Replace the placeholder values with the actual values for this conversation. lea
 SEND_DOCUMENT RULES (CRITICAL — read every word):
 
 WHEN TO SEND:
-User asks for ANY of: brochure, plan, PDF, document, file, image, photo, layout, cost sheet, unit plan, floor plan, price list, site plan, location map.
-Hindi/Hinglish triggers: "bhejo", "chahiye", "send karo", "share karo", "dikhao", "de do".
+User asks for ANY of: brochure, plan, PDF, document, file, image, photo, picture, layout, cost sheet, unit plan, floor plan, price list, site plan, location map.
+Hindi/Hinglish triggers: "bhejo", "chahiye", "send karo", "share karo", "dikhao", "de do", "photo bhejo", "image bhejo".
+NOTE: Files can be PDF OR image (JPEG/PNG) — both are sent automatically. You just set the URL, the system handles the type.
 
 HOW TO FIND THE FILE:
 Step 1 — Identify the project from context (current conversation or user's explicit mention).
