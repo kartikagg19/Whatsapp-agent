@@ -939,12 +939,18 @@ router.post('/knowledge/upload', upload.single('file'), async (req, res) => {
 
       if (mt === 'application/pdf') {
         fileType = 'pdf';
-        const parsed = await pdfParse(fileBuffer);
-        content = parsed.text || '';
+        // Always upload to storage first so bot can send it
         try {
           file_url = await db.uploadToStorage(name, fileBuffer, 'application/pdf');
           console.log(`📤 PDF uploaded: ${file_url}`);
         } catch (e) { console.warn('⚠️ Storage upload failed:', e.message); }
+        // Try to extract text — scanned PDFs return empty, that's OK
+        try {
+          const parsed = await pdfParse(fileBuffer);
+          content = parsed.text || '';
+        } catch { content = ''; }
+        // For scanned PDFs with no text, use a placeholder so the record saves
+        if (!content.trim()) content = `[Scanned PDF — send only: ${name}]`;
 
       } else if (mt === 'application/json' || name.endsWith('.json')) {
         fileType = 'json';
@@ -969,7 +975,7 @@ router.post('/knowledge/upload', upload.single('file'), async (req, res) => {
       content = req.body.content;
     }
 
-    if (!content.trim()) return res.status(400).json({ error: 'No content found in file' });
+    if (!content.trim()) return res.status(400).json({ error: 'No content and no file URL — nothing to save' });
 
     const doc = await db.addKnowledge({
       name,
