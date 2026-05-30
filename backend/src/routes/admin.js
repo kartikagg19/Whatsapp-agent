@@ -925,29 +925,45 @@ router.get('/knowledge', async (req, res) => {
 router.post('/knowledge/upload', upload.single('file'), async (req, res) => {
   let tempPath = null;
   try {
-    let content  = '';
-    let fileType = 'manual';
-    let name     = req.body.name || 'Untitled';
-    let file_url = null;
+    let content      = '';
+    let fileType     = 'manual';
+    let name         = req.body.name || 'Untitled';
+    let file_url     = null;
+    const project_group = req.body.project_group || null;
 
     if (req.file) {
       tempPath = req.file.path;
       name     = req.file.originalname;
-      fileType = req.file.mimetype === 'application/pdf' ? 'pdf' : 'text';
       const fileBuffer = fs.readFileSync(tempPath);
+      const mt = req.file.mimetype || '';
 
-      if (fileType === 'pdf') {
+      if (mt === 'application/pdf') {
+        fileType = 'pdf';
         const parsed = await pdfParse(fileBuffer);
-        content = parsed.text;
-        // Also upload original PDF to Supabase Storage so it can be sent to users
+        content = parsed.text || '';
         try {
           file_url = await db.uploadToStorage(name, fileBuffer, 'application/pdf');
-          console.log(`📤 PDF uploaded to storage: ${file_url}`);
-        } catch (storageErr) {
-          console.warn('⚠️  Storage upload failed (text still saved):', storageErr.message);
-        }
-      } else {
+          console.log(`📤 PDF uploaded: ${file_url}`);
+        } catch (e) { console.warn('⚠️ Storage upload failed:', e.message); }
+
+      } else if (mt === 'application/json' || name.endsWith('.json')) {
+        fileType = 'json';
         content = fileBuffer.toString('utf8');
+        try { JSON.parse(content); } catch { return res.status(400).json({ error: 'Invalid JSON' }); }
+
+      } else if (mt.startsWith('image/') || /\.(jpe?g|png|gif|webp)$/i.test(name)) {
+        fileType = 'image';
+        content  = `[Image: ${name}]`; // placeholder so DB row has content
+        try {
+          file_url = await db.uploadToStorage(name, fileBuffer, mt || 'image/jpeg');
+          console.log(`🖼️  Image uploaded: ${file_url}`);
+        } catch (e) { console.warn('⚠️ Storage upload failed:', e.message); }
+        // Images have no text content — if storage failed there's nothing to save
+        if (!file_url) return res.status(500).json({ error: 'Image storage upload failed' });
+
+      } else {
+        fileType = 'text';
+        content  = fileBuffer.toString('utf8');
       }
     } else if (req.body.content) {
       content = req.body.content;
@@ -957,10 +973,11 @@ router.post('/knowledge/upload', upload.single('file'), async (req, res) => {
 
     const doc = await db.addKnowledge({
       name,
-      content: content.trim(),
-      file_type: fileType,
-      size_chars: content.length,
-      file_url
+      content:      content.trim(),
+      file_type:    fileType,
+      size_chars:   content.length,
+      file_url,
+      project_group
     });
     res.json({ success: true, data: doc });
   } catch (e) {
