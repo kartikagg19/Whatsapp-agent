@@ -78,6 +78,7 @@ REPLY MESSAGE RULES (CRITICAL):
 - NEVER include placeholders like [ATTACH_DOC:...], [FILE:...], [DOC:...], or ANY bracket notation in reply_message.
 - NEVER mention the filename or URL in the reply_message text.
 - The backend sends the actual file automatically — your reply_message is ONLY the chat text.
+- CRITICAL CONSISTENCY RULE: If reply_message says you are sending/sharing a file ("bhej rahi hoon", "share kar rahi hoon", "yeh lo", etc.), then send_document MUST have a URL. NEVER say you are sending something while leaving send_document null.
 `;
 
 // Generic NEPQ-based system prompt — project-specific KB lives in the knowledge_base table.
@@ -326,6 +327,46 @@ async function getAIReply(userMessage, history = [], lead = null) {
   parsed.lead_score    = Math.max(1, Math.min(10, parseInt(parsed.lead_score) || 3));
   parsed.input_tokens  = inputTokens;
   parsed.output_tokens = outputTokens;
+
+  // ── SAFETY NET: if AI forgot send_document but reply says it's sending ──
+  // Detects phrases like "bhej rahi", "sharing", "sending", "bhej raha", etc.
+  if (!parsed.send_document) {
+    const sendingHints = /bhej\s*rahi|bhej\s*raha|share\s*kar\s*r|sending|sharing|yeh\s*lo|dekh\s*lo|attach|file\s*bhej|brochure\s*bhej|pdf\s*bhej|document\s*bhej/i;
+    if (sendingHints.test(parsed.reply_message || '')) {
+      try {
+        const { getKnowledgeBase } = require('./database');
+        const docs = await getKnowledgeBase();
+        const filesWithUrl = docs.filter(d => d.file_url);
+        if (filesWithUrl.length > 0) {
+          // Try to find a file matching the project mentioned in the reply
+          const reply = (parsed.reply_message || '').toLowerCase();
+          let best = null;
+          // Prefer brochure/PDF, match project name
+          for (const doc of filesWithUrl) {
+            const pg = (doc.project_group || '').toLowerCase();
+            const nm = (doc.name || '').toLowerCase();
+            // Check if project group words appear in the reply
+            const pgWords = pg.split(/\s+/).filter(w => w.length > 3);
+            const projectMatch = pgWords.some(w => reply.includes(w));
+            if (projectMatch) {
+              if (!best || nm.includes('brochure')) best = doc;
+              // Prefer PDF over image for first-match
+              if (nm.includes('.pdf') && (!best.name.includes('.pdf'))) best = doc;
+            }
+          }
+          // Fallback: use first file with URL
+          if (!best) best = filesWithUrl[0];
+          if (best) {
+            parsed.send_document = best.file_url;
+            console.log(`🔧 Safety net: auto-set send_document to "${best.name}" (AI forgot to set it)`);
+          }
+        }
+      } catch (e) {
+        console.warn('⚠️ Safety net lookup failed:', e.message);
+      }
+    }
+  }
+
   return parsed;
 }
 
