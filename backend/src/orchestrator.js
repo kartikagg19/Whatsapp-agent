@@ -32,6 +32,7 @@ const { sendText, sendImage, sendDocument, sendButtons, alertSales, isImageUrl }
 const { syncTimeline } = require('./crmClient');
 const { splitReply } = require('./chunker');
 const { analyzeExchange } = require('./analyzer');
+const { resolveTypeToRows } = require('./mediaTypes');
 const db = require('./database');
 
 const SETTINGS_FILE = path.join(__dirname, '../../settings.json');
@@ -246,12 +247,21 @@ async function runPipeline(phone, buf) {
       }
     }
 
+    // ── Resolve attachments (v2.7 contract + legacy fallback) ──────
+    // Returns an ordered list of { kind, url, filename } to send AFTER
+    // the text chunks. Dedupes URLs so the same file isn't sent twice.
+    const attachments = await resolveAttachments(ai);
+    if (attachments.length > 0) {
+      console.log(`📎 ${attachments.length} attachment(s) queued for ${phone}: ` +
+        attachments.map(a => `${a.kind}:${a.filename}`).join(', '));
+    }
+
     // ── Chunked send ────────────────────────────────────────────────
     const chunks = splitReply(ai.reply_message);
     const alreadySentCalendar = existingLead?.site_visit_offered === true;
     const attachButtonsToLast = siteVisitNow && !alreadySentCalendar;
 
-    // Document goes after text chunks but BEFORE the calendar prompt,
+    // Files go AFTER text chunks but BEFORE the calendar prompt,
     // matching the prior single-message flow.
     for (let i = 0; i < chunks.length; i++) {
       if (aborted(signal)) {
@@ -260,36 +270,32 @@ async function runPipeline(phone, buf) {
       }
       const isLast = i === chunks.length - 1;
       try {
-        if (isLast && attachButtonsToLast) {
-          // last text chunk + calendar buttons (same UX as before)
-          await sendText(phone, chunks[i]);
-          if (aborted(signal)) return;
-          if (ai.send_document) {
-            await sendDocumentSafe(phone, ai.send_document);
-            if (aborted(signal)) return;
-          }
-          await sendButtons(phone, '📅 Site visit ke liye time choose karein:', [
-            { id: 'saturday', title: 'Saturday' },
-            { id: 'sunday',   title: 'Sunday'   },
-            { id: 'weekday',  title: 'Weekday'  }
-          ]);
-          console.log(`📅 Calendar buttons sent to ${phone}`);
-        } else if (isLast) {
-          await sendText(phone, chunks[i]);
-          if (ai.send_document && !aborted(signal)) {
-            await sendDocumentSafe(phone, ai.send_document);
-          }
-        } else {
-          await sendText(phone, chunks[i]);
-          // small typing pause between chunks
+        await sendText(phone, chunks[i]);
+        if (!isLast) {
           await sleep(rand(T.chunk_delay_min, T.chunk_delay_max));
         }
       } catch (e) {
         console.error('❌ sendText failed:', e.response?.data || e.message);
-        // Don't retry — Meta will surface the error in logs. Stop the
-        // chunk loop so we don't pile up failures.
         return;
       }
+    }
+
+    // Send each attachment as native WhatsApp media (image / document).
+    for (const a of attachments) {
+      if (aborted(signal)) {
+        console.log(`⏹  orchestrator: abort before attachment ${a.filename}`);
+        return;
+      }
+      await sendAttachment(phone, a);
+    }
+
+    if (attachButtonsToLast && !aborted(signal)) {
+      await sendButtons(phone, '📅 Site visit ke liye time choose karein:', [
+        { id: 'saturday', title: 'Saturday' },
+        { id: 'sunday',   title: 'Sunday'   },
+        { id: 'weekday',  title: 'Weekday'  }
+      ]).catch(e => console.warn('⚠️ Calendar buttons failed:', e.message));
+      console.log(`📅 Calendar buttons sent to ${phone}`);
     }
 
     // ── HOT lead alert (fires ONCE — preserved from webhook.js) ─────
@@ -329,46 +335,93 @@ async function runPipeline(phone, buf) {
   }
 }
 
-async function sendDocumentSafe(phone, url) {
-  // Decode the filename for display; handle URL-encoded spaces
-  const rawName = url.split('/').pop() || 'document';
-  const docName = decodeURIComponent(rawName);
-  const isImg   = isImageUrl(url);
+// Resolve documents_to_attach + images_to_attach (v2.7) into a flat,
+// deduped, ordered list of attachments ready to send. Falls back to
+// the legacy single `send_document` URL if the new fields are empty.
+//
+// Returns: [{ kind: 'image'|'document', url, filename }]
+async function resolveAttachments(ai) {
+  const out = [];
+  const seenUrls = new Set();
+  const push = (kind, url, filename) => {
+    if (!url || seenUrls.has(url)) return;
+    seenUrls.add(url);
+    out.push({ kind, url, filename: filename || decodeURIComponent(url.split('/').pop() || 'file') });
+  };
 
-  console.log(`📤 Sending ${isImg ? 'image' : 'document'}: ${docName}`);
+  const docTypes = Array.isArray(ai.documents_to_attach) ? ai.documents_to_attach : [];
+  const imgTypes = Array.isArray(ai.images_to_attach)    ? ai.images_to_attach    : [];
 
-  if (isImg) {
-    // Try as WhatsApp image first (shows inline in chat)
+  if (docTypes.length || imgTypes.length) {
+    let kbRows = [];
+    try { kbRows = await db.getKnowledgeBase(); }
+    catch (e) { console.warn('⚠️ resolveAttachments: KB fetch failed:', e.message); return out; }
+
+    const projectHint = ai.project_in_scope || '';
+
+    for (const t of docTypes) {
+      const rows = resolveTypeToRows(kbRows, 'pdf', t, projectHint);
+      if (rows.length === 0) {
+        console.warn(`⚠️ resolveAttachments: no PDF rows for doc_type="${t}" project="${projectHint}"`);
+        continue;
+      }
+      for (const r of rows) push('document', r.file_url, r.name);
+    }
+    for (const t of imgTypes) {
+      const rows = resolveTypeToRows(kbRows, 'image', t, projectHint);
+      if (rows.length === 0) {
+        console.warn(`⚠️ resolveAttachments: no image rows for image_type="${t}" project="${projectHint}"`);
+        continue;
+      }
+      for (const r of rows) push('image', r.file_url, r.name);
+    }
+  }
+
+  // Legacy single-URL fallback (still used if the AI emits the old shape).
+  if (out.length === 0 && ai.send_document) {
+    const kind = isImageUrl(ai.send_document) ? 'image' : 'document';
+    push(kind, ai.send_document);
+  }
+  return out;
+}
+
+// Send one attachment via WhatsApp. Tries the right native type first
+// (image | document), with a "send as document" fallback if Meta
+// rejects an image (oversized, wrong mime sniff, etc), and a final
+// text-link fallback so the user at least gets the URL.
+async function sendAttachment(phone, attachment) {
+  const { kind, url, filename } = attachment;
+  const docName = filename || decodeURIComponent(url.split('/').pop() || 'file');
+  console.log(`📤 Sending ${kind}: ${docName}`);
+
+  if (kind === 'image') {
     try {
       await sendImage(phone, url, '');
       console.log(`🖼️ Image sent OK: ${docName}`);
       return;
     } catch (e) {
-      const err = e.response?.data?.error || e.message || '';
-      console.warn(`⚠️ Image send failed (${err}), retrying as document...`);
+      const err = e.response?.data?.error?.message || e.message || '';
+      console.warn(`⚠️ Image send failed (${err}) — retrying as document`);
     }
-    // Fallback: send image as document (still downloadable, no size limit issue)
     try {
       await sendDocument(phone, url, docName, '');
       console.log(`📎 Image sent as document: ${docName}`);
       return;
     } catch (e) {
       const err = e.response?.data?.error?.message || e.message || '';
-      console.error(`❌ Document fallback also failed: ${err}`);
-      await sendText(phone, `📸 ${docName.replace(/\.(jpe?g|png)$/i,'')}\n\nYahan se dekh sakte hain:\n${url}`).catch(() => {});
+      console.error(`❌ Image-as-document fallback failed: ${err}`);
+      await sendText(phone, `📸 ${docName.replace(/\.(jpe?g|png|gif|webp)$/i,'')}\n\nYahan se dekh sakte hain:\n${url}`).catch(() => {});
       return;
     }
   }
 
-  // PDF / other document
+  // Document (PDF or other)
   try {
     await sendDocument(phone, url, docName, '');
     console.log(`📎 Document sent OK: ${docName}`);
   } catch (e) {
-    const errObj = e.response?.data?.error;
-    const errMsg = errObj?.message || e.message || '';
-    console.error(`❌ Document send failed: ${errMsg}`, errObj || '');
-    // Send the URL as plain text so user at least gets the link
+    const errMsg = e.response?.data?.error?.message || e.message || '';
+    console.error(`❌ Document send failed: ${errMsg}`);
     await sendText(phone, `📄 *${docName.replace(/\.pdf$/i,'')}*\n\nYahan se download karein:\n${url}`).catch(() => {});
   }
 }
