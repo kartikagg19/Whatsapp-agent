@@ -93,6 +93,26 @@ function parseMessage(body) {
   } catch { return null; }
 }
 
+// Detect if a URL is an image based on extension (handles URL-encoded filenames)
+function isImageUrl(url) {
+  const decoded = decodeURIComponent(url);
+  return /\.(jpe?g|png|gif|webp|bmp)(\?|#|$)/i.test(decoded);
+}
+
+// Send an image from a public URL
+async function sendImage(to, imageUrl, caption) {
+  try {
+    await axios.post(`${API}/${PHONE()}/messages`, {
+      messaging_product: 'whatsapp', to, type: 'image',
+      image: { link: imageUrl, caption: caption || '' }
+    }, { headers: HEADER() });
+    console.log(`🖼️ Image sent to ${to}`);
+  } catch (err) {
+    console.error(`❌ Image send failed to ${to}:`, err.response?.data || err.message);
+    throw err;
+  }
+}
+
 // Send a document (PDF/file) from a public URL
 async function sendDocument(to, fileUrl, filename, caption) {
   try {
@@ -139,4 +159,4 @@ async function sendTemplate(to, templateName, languageCode = 'en', params = []) 
   }
 }
 
-module.exports = { sendText, sendDocument, sendButtons, markRead, markReadWithTyping, alertSales, parseMessage, sendTemplate };
+module.exports = { sendText, sendImage, sendDocument, sendButtons, markRead, markReadWithTyping, alertSales, parseMessage, sendTemplate, isImageUrl };

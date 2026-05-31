@@ -152,7 +152,7 @@ function getToken() {
 }
 
 function requireAuth(req, res, next) {
-  if (req.path === '/login' || req.path === '/whatsapp-test' || req.path === '/ai-test' || req.path === '/send' || req.path === '/kb-debug' || req.path === '/export/csv') return next();
+  if (req.path === '/login' || req.path === '/access' || req.path === '/stats' || req.path === '/whatsapp-test' || req.path === '/ai-test' || req.path === '/send' || req.path === '/kb-debug' || req.path === '/export/csv') return next();
   const token = (req.headers['authorization'] || '').replace('Bearer ', '').trim();
   if (!token || token !== getToken()) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -171,6 +171,11 @@ router.post('/login', (req, res) => {
     return res.json({ success: true, token: getToken() });
   }
   res.status(401).json({ error: 'Invalid email or password' });
+});
+
+// GET /api/access — URL-only auth: knowing the backend URL is enough to get a token
+router.get('/access', (req, res) => {
+  res.json({ success: true, token: getToken() });
 });
 
 // GET /api/kb-debug — show what AI sees in knowledge base (file_url check)
@@ -381,6 +386,80 @@ router.get('/export/csv', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/campaigns — list all unique campaign names
+router.get('/campaigns', async (req, res) => {
+  try {
+    const campaigns = await db.getAllCampaigns();
+    res.json({ success: true, data: campaigns });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/campaigns/rename — rename a campaign (updates all leads)
+// Body: { from: "old name", to: "new name" }
+router.post('/campaigns/rename', async (req, res) => {
+  try {
+    const { from, to } = req.body;
+    if (!from || !to) return res.status(400).json({ error: 'from and to required' });
+    const { error, count } = await db.getDB()
+      .from('leads')
+      .update({ campaign: to.trim() })
+      .eq('campaign', from.trim());
+    if (error) throw error;
+    res.json({ success: true, updated: count });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/campaigns/assign — assign campaign to specific phones OR all leads with no campaign
+// Body: { campaign: "Day 1", phones: [...] } OR { campaign: "Day 1", all_unassigned: true }
+//       OR { campaign: "Day 1", from_date: "2025-05-29", to_date: "2025-05-29" }
+router.post('/campaigns/assign', async (req, res) => {
+  try {
+    const { campaign, phones, all_unassigned, from_date, to_date } = req.body;
+    if (!campaign) return res.status(400).json({ error: 'campaign required' });
+
+    let query = db.getDB().from('leads').update({ campaign: campaign.trim() });
+
+    if (from_date || to_date) {
+      // Assign by date range based on created_at
+      query = query.or('campaign.is.null,campaign.eq.');
+      if (from_date) query = query.gte('created_at', from_date + 'T00:00:00.000Z');
+      if (to_date)   query = query.lte('created_at', to_date   + 'T23:59:59.999Z');
+    } else if (all_unassigned) {
+      query = query.or('campaign.is.null,campaign.eq.');
+    } else if (phones && phones.length > 0) {
+      query = query.in('phone', phones);
+    } else {
+      return res.status(400).json({ error: 'phones, all_unassigned, or from_date/to_date required' });
+    }
+
+    const { error, count } = await query;
+    if (error) throw error;
+    res.json({ success: true, updated: count });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/campaigns/date-preview — count unassigned leads per date (helps plan campaign splits)
+router.get('/campaigns/date-preview', async (req, res) => {
+  try {
+    const { data, error } = await db.getDB()
+      .from('leads')
+      .select('created_at')
+      .or('campaign.is.null,campaign.eq.')
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    // Group by date
+    const counts = {};
+    for (const row of (data || [])) {
+      const d = (row.created_at || '').slice(0, 10);
+      if (d) counts[d] = (counts[d] || 0) + 1;
+    }
+    const result = Object.entries(counts)
+      .sort(([a],[b]) => a.localeCompare(b))
+      .map(([date, count]) => ({ date, count }));
+    res.json({ success: true, data: result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /api/leads/:phone — single lead + full chat
 router.get('/leads/:phone', async (req, res) => {
   try {
@@ -421,7 +500,9 @@ router.post('/send', async (req, res) => {
       // and as a last-resort fallback for {{1}} when CRM forgets template_params.
       name: bodyName, lead_name: bodyLeadName, contact_name: bodyContactName,
       // Aliases for params/language in case CRM uses unprefixed names.
-      params: bodyParams, language: bodyLanguage
+      params: bodyParams, language: bodyLanguage,
+      // Campaign tag — pass "Day 1", "Day 2" etc. from your CRM
+      campaign
     } = req.body;
     const headerSecret = req.headers['x-webhook-secret'];
     const crmSecret = process.env.CRM_WEBHOOK_SECRET || '';
@@ -624,7 +705,8 @@ router.post('/send', async (req, res) => {
           name: upsertName,
           score: existingLead?.score ?? 3,
           label: existingLead?.label || 'COLD',
-          intent: existingLead?.intent || 'general'
+          intent: existingLead?.intent || 'general',
+          campaign: campaign || undefined
         }).catch((e) => console.warn(`upsertLead skipped: ${e.message}`));
         console.log(`💾 Lead upserted for ${normalizedPhone} (name="${upsertName}")`);
       }
@@ -881,42 +963,65 @@ router.get('/knowledge', async (req, res) => {
 router.post('/knowledge/upload', upload.single('file'), async (req, res) => {
   let tempPath = null;
   try {
-    let content  = '';
-    let fileType = 'manual';
-    let name     = req.body.name || 'Untitled';
-    let file_url = null;
+    let content      = '';
+    let fileType     = 'manual';
+    let name         = req.body.name || 'Untitled';
+    let file_url     = null;
+    const project_group = req.body.project_group || null;
 
     if (req.file) {
       tempPath = req.file.path;
       name     = req.file.originalname;
-      fileType = req.file.mimetype === 'application/pdf' ? 'pdf' : 'text';
       const fileBuffer = fs.readFileSync(tempPath);
+      const mt = req.file.mimetype || '';
 
-      if (fileType === 'pdf') {
-        const parsed = await pdfParse(fileBuffer);
-        content = parsed.text;
-        // Also upload original PDF to Supabase Storage so it can be sent to users
+      if (mt === 'application/pdf') {
+        fileType = 'pdf';
+        // Always upload to storage first so bot can send it
         try {
           file_url = await db.uploadToStorage(name, fileBuffer, 'application/pdf');
-          console.log(`📤 PDF uploaded to storage: ${file_url}`);
-        } catch (storageErr) {
-          console.warn('⚠️  Storage upload failed (text still saved):', storageErr.message);
-        }
-      } else {
+          console.log(`📤 PDF uploaded: ${file_url}`);
+        } catch (e) { console.warn('⚠️ Storage upload failed:', e.message); }
+        // Try to extract text — scanned PDFs return empty, that's OK
+        try {
+          const parsed = await pdfParse(fileBuffer);
+          content = parsed.text || '';
+        } catch { content = ''; }
+        // For scanned PDFs with no text, use a placeholder so the record saves
+        if (!content.trim()) content = `[Scanned PDF — send only: ${name}]`;
+
+      } else if (mt === 'application/json' || name.endsWith('.json')) {
+        fileType = 'json';
         content = fileBuffer.toString('utf8');
+        try { JSON.parse(content); } catch { return res.status(400).json({ error: 'Invalid JSON' }); }
+
+      } else if (mt.startsWith('image/') || /\.(jpe?g|png|gif|webp)$/i.test(name)) {
+        fileType = 'image';
+        content  = `[Image: ${name}]`; // placeholder so DB row has content
+        try {
+          file_url = await db.uploadToStorage(name, fileBuffer, mt || 'image/jpeg');
+          console.log(`🖼️  Image uploaded: ${file_url}`);
+        } catch (e) { console.warn('⚠️ Storage upload failed:', e.message); }
+        // Images have no text content — if storage failed there's nothing to save
+        if (!file_url) return res.status(500).json({ error: 'Image storage upload failed' });
+
+      } else {
+        fileType = 'text';
+        content  = fileBuffer.toString('utf8');
       }
     } else if (req.body.content) {
       content = req.body.content;
     }
 
-    if (!content.trim()) return res.status(400).json({ error: 'No content found in file' });
+    if (!content.trim()) return res.status(400).json({ error: 'No content and no file URL — nothing to save' });
 
     const doc = await db.addKnowledge({
       name,
-      content: content.trim(),
-      file_type: fileType,
-      size_chars: content.length,
-      file_url
+      content:      content.trim(),
+      file_type:    fileType,
+      size_chars:   content.length,
+      file_url,
+      project_group
     });
     res.json({ success: true, data: doc });
   } catch (e) {
@@ -940,8 +1045,10 @@ router.post('/knowledge/project', upload.array('files', 50), async (req, res) =>
     try {
       const fileBuffer = fs.readFileSync(tempPath);
       const name      = file.originalname;
-      const isJson    = name.toLowerCase().endsWith('.json') || file.mimetype === 'application/json';
-      const isPdf     = file.mimetype === 'application/pdf'  || name.toLowerCase().endsWith('.pdf');
+      const nameL     = name.toLowerCase();
+      const isJson    = nameL.endsWith('.json') || file.mimetype === 'application/json';
+      const isPdf     = file.mimetype === 'application/pdf' || nameL.endsWith('.pdf');
+      const isImage   = /\.(jpe?g|png|gif|webp|bmp)$/.test(nameL) || file.mimetype.startsWith('image/');
 
       let content = '', file_url = null, fileType = 'text';
 
@@ -952,18 +1059,33 @@ router.post('/knowledge/project', upload.array('files', 50), async (req, res) =>
           errors.push({ name, error: 'Invalid JSON — skipped' }); continue;
         }
       } else if (isPdf) {
-        const parsed = await pdfParse(fileBuffer);
-        content  = parsed.text;
         fileType = 'pdf';
         try {
+          const parsed = await pdfParse(fileBuffer);
+          content = parsed.text || '';
+        } catch { content = ''; }
+        try {
           file_url = await db.uploadToStorage(`${project_group}/${name}`, fileBuffer, 'application/pdf');
-        } catch (e) { console.warn('Storage upload failed:', e.message); }
+          console.log(`☁️  PDF uploaded: ${file_url}`);
+        } catch (e) { console.warn('PDF storage upload failed:', e.message); }
+      } else if (isImage) {
+        // Images: upload to storage so they can be sent via WhatsApp, no text needed
+        fileType = 'image';
+        const imgMime = file.mimetype || (nameL.endsWith('.png') ? 'image/png' : 'image/jpeg');
+        try {
+          file_url = await db.uploadToStorage(`${project_group}/${name}`, fileBuffer, imgMime);
+          console.log(`☁️  Image uploaded: ${file_url}`);
+          content = `[Image file: ${name}]`; // placeholder so the not-empty check passes
+        } catch (e) {
+          errors.push({ name, error: 'Image upload failed: ' + e.message }); continue;
+        }
       } else {
         content  = fileBuffer.toString('utf8');
         fileType = 'text';
       }
 
-      if (!content.trim()) { errors.push({ name, error: 'Empty content — skipped' }); continue; }
+      // Skip only if there is truly no content AND no file URL
+      if (!content.trim() && !file_url) { errors.push({ name, error: 'Empty content — skipped' }); continue; }
 
       const doc = await db.addKnowledge({
         name, content: content.trim(), file_type: fileType,
@@ -979,6 +1101,24 @@ router.post('/knowledge/project', upload.array('files', 50), async (req, res) =>
 
   console.log(`📁 Project "${project_group}": ${results.length} uploaded, ${errors.length} errors`);
   res.json({ success: true, uploaded: results.length, errors, data: results });
+});
+
+// POST /api/knowledge/add-url — save a file URL directly (file already on storage)
+// Body: { name, file_url, file_type, project_group, content }
+router.post('/knowledge/add-url', async (req, res) => {
+  try {
+    const { name, file_url, file_type, project_group, content } = req.body;
+    if (!name || !file_url) return res.status(400).json({ error: 'name and file_url required' });
+    const doc = await db.addKnowledge({
+      name,
+      content: content || `[${file_type || 'file'}: ${name}]`,
+      file_type: file_type || 'file',
+      size_chars: (content || '').length,
+      file_url,
+      project_group: project_group || null
+    });
+    res.json({ success: true, data: doc });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // DELETE /api/knowledge/:id

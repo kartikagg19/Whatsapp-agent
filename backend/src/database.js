@@ -16,10 +16,10 @@ const getDB = () => {
 
 // ── LEADS ────────────────────────────────────────────────────────
 
-async function upsertLead({ phone, name, score, label, intent, budget_range, location_preference, timeline, purpose, site_visit_offered }) {
+async function upsertLead({ phone, name, score, label, intent, budget_range, location_preference, timeline, purpose, site_visit_offered, campaign }) {
   const d   = getDB();
   const now = new Date().toISOString();
-  const { data: ex } = await d.from('leads').select('id,message_count').eq('phone', phone).single();
+  const { data: ex } = await d.from('leads').select('id,message_count,campaign').eq('phone', phone).single();
 
   const extras = {};
   if (budget_range)        extras.budget_range        = budget_range;
@@ -27,6 +27,8 @@ async function upsertLead({ phone, name, score, label, intent, budget_range, loc
   if (timeline)            extras.timeline            = timeline;
   if (purpose)             extras.purpose             = purpose;
   if (site_visit_offered)  extras.site_visit_offered  = true;
+  // Only set campaign on new leads or if not already set (first-touch attribution)
+  if (campaign && (!ex || !ex.campaign)) extras.campaign = campaign;
 
   if (ex) {
     const { data, error } = await d.from('leads')
@@ -53,6 +55,13 @@ async function getLeadByPhone(phone) {
   const { data, error } = await getDB().from('leads').select('*').eq('phone', phone).single();
   if (error && error.code !== 'PGRST116') throw error;
   return data || null;
+}
+
+async function getAllCampaigns() {
+  const { data, error } = await getDB().from('leads').select('campaign').not('campaign', 'is', null).neq('campaign', '');
+  if (error) return [];
+  const unique = [...new Set((data || []).map(r => r.campaign).filter(Boolean))].sort();
+  return unique;
 }
 
 async function getStats() {
@@ -300,4 +309,26 @@ async function saveAppSettings(settingsObj) {
   if (error) throw error;
 }
 
-module.exports = { upsertLead, getAllLeads, getLeadByPhone, getStats, saveMessage, getHistory, getConversations, hasInboundFromPhone, hasRecentInboundFromPhone, getKnowledgeBase, addKnowledge, deleteKnowledge, getKnowledgeText, uploadToStorage, getLeadsForFollowUp, markFollowUpSent, getCostStats, getAppSettings, saveAppSettings };
+module.exports = {
+  getDB,
+  upsertLead,
+  getAllLeads,
+  getLeadByPhone,
+  getStats,
+  getAllCampaigns,
+  saveMessage,
+  getHistory,
+  getConversations,
+  hasInboundFromPhone,
+  hasRecentInboundFromPhone,
+  getKnowledgeBase,
+  addKnowledge,
+  deleteKnowledge,
+  getKnowledgeText,
+  uploadToStorage,
+  getLeadsForFollowUp,
+  markFollowUpSent,
+  getCostStats,
+  getAppSettings,
+  saveAppSettings
+};

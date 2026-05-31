@@ -20,3 +20,6 @@ Thumbs.db
 
 # Settings saved via dashboard (contains client data)
 settings.json
+
+.vercel
+.env*

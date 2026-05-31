@@ -46,16 +46,39 @@ You MUST reply with ONLY valid JSON matching this exact structure. No extra text
 
 Replace the placeholder values with the actual values for this conversation. lead_score must be an integer 1–10.
 
-SEND_DOCUMENT RULES (CRITICAL — follow exactly):
-- Triggers: user asks for brochure, plan, PDF, document, file, layout, cost sheet, unit plan, floor plan, price list, or says "bhejo", "chahiye", "send", "share".
-- Step 1: Identify which project the user is asking about from context.
-- Step 2: Find that project's "SENDABLE FILES FOR [project]" section in the KNOWLEDGE BASE.
-- Step 3: Pick the best matching file. If user says "brochure" but only a "Sale Plan" or "Cost Sheet" exists → send that. ANY file is better than nothing.
-- Step 4: Copy the EXACT URL after "send_document URL for" → set "send_document" to that URL.
-- If user does NOT specify a project, use the file from whichever project is being discussed in the conversation.
-- If multiple files exist for a project, pick the most relevant one (brochure/sale plan > cost sheet > layout map).
-- NEVER invent or guess a URL. If no file exists at all → set send_document to null.
-- ALWAYS write a reply_message telling the user you are sending the file and what it is.
+SEND_DOCUMENT RULES (CRITICAL — read every word):
+
+WHEN TO SEND:
+User asks for ANY of: brochure, plan, PDF, document, file, image, photo, picture, layout, cost sheet, unit plan, floor plan, price list, site plan, location map.
+Hindi/Hinglish triggers: "bhejo", "chahiye", "send karo", "share karo", "dikhao", "de do", "photo bhejo", "image bhejo".
+NOTE: Files can be PDF OR image (JPEG/PNG) — both are sent automatically. You just set the URL, the system handles the type.
+
+HOW TO FIND THE FILE:
+Step 1 — Identify the project from context (current conversation or user's explicit mention).
+Step 2 — Scan the KNOWLEDGE BASE for a section that starts with: SENDABLE FILES FOR "[project name]"
+         Use PARTIAL / FUZZY matching: "Krishna Aura" matches "Krishna Aura NX", "Krishna Dharni" matches "Krishna Dharni A1", etc.
+Step 3 — That section lists lines like:   send_document URL for "filename": https://...
+Step 4 — Copy the FULL URL exactly as written (do NOT shorten, modify, or skip it).
+Step 5 — Set "send_document" to that exact URL string.
+
+MATCHING RULES:
+- User says "brochure" → find any file (brochure / sale plan / cost sheet) — send the closest match.
+- User says "floor plan" or "unit plan" → send floor plan or unit plan if available, else send any file.
+- User says "images", "photos", "render", "building photo" → send the JPEG image file.
+- User says "cost sheet" or "price" → send cost sheet PDF.
+- If user does NOT name a project, use the project currently being discussed in conversation.
+- If multiple files exist, priority: brochure > sale plan > cost sheet > floor plan > render image > any other file.
+- PARTIAL NAME MATCH: "Krishna Aura" → look for any project containing "Aura" (Krishna Aura NX).
+- NEVER leave send_document null if ANY file URL exists for the relevant project or a close match.
+- NEVER invent or guess a URL — only use URLs from the KNOWLEDGE BASE.
+
+REPLY MESSAGE RULES (CRITICAL):
+- Write a short natural WhatsApp message telling the user the file is coming.
+- Example: "Yeh lo Krishna Veer ka brochure! 📄"
+- NEVER include placeholders like [ATTACH_DOC:...], [FILE:...], [DOC:...], or ANY bracket notation in reply_message.
+- NEVER mention the filename or URL in the reply_message text.
+- The backend sends the actual file automatically — your reply_message is ONLY the chat text.
+- CRITICAL CONSISTENCY RULE: If reply_message says you are sending/sharing a file ("bhej rahi hoon", "share kar rahi hoon", "yeh lo", etc.), then send_document MUST have a URL. NEVER say you are sending something while leaving send_document null.
 `;
 
 // Generic NEPQ-based system prompt — project-specific KB lives in the knowledge_base table.
@@ -304,6 +327,46 @@ async function getAIReply(userMessage, history = [], lead = null) {
   parsed.lead_score    = Math.max(1, Math.min(10, parseInt(parsed.lead_score) || 3));
   parsed.input_tokens  = inputTokens;
   parsed.output_tokens = outputTokens;
+
+  // ── SAFETY NET: if AI forgot send_document but reply says it's sending ──
+  // Detects phrases like "bhej rahi", "sharing", "sending", "bhej raha", etc.
+  if (!parsed.send_document) {
+    const sendingHints = /bhej\s*rahi|bhej\s*raha|share\s*kar\s*r|sending|sharing|yeh\s*lo|dekh\s*lo|attach|file\s*bhej|brochure\s*bhej|pdf\s*bhej|document\s*bhej/i;
+    if (sendingHints.test(parsed.reply_message || '')) {
+      try {
+        const { getKnowledgeBase } = require('./database');
+        const docs = await getKnowledgeBase();
+        const filesWithUrl = docs.filter(d => d.file_url);
+        if (filesWithUrl.length > 0) {
+          // Try to find a file matching the project mentioned in the reply
+          const reply = (parsed.reply_message || '').toLowerCase();
+          let best = null;
+          // Prefer brochure/PDF, match project name
+          for (const doc of filesWithUrl) {
+            const pg = (doc.project_group || '').toLowerCase();
+            const nm = (doc.name || '').toLowerCase();
+            // Check if project group words appear in the reply
+            const pgWords = pg.split(/\s+/).filter(w => w.length > 3);
+            const projectMatch = pgWords.some(w => reply.includes(w));
+            if (projectMatch) {
+              if (!best || nm.includes('brochure')) best = doc;
+              // Prefer PDF over image for first-match
+              if (nm.includes('.pdf') && (!best.name.includes('.pdf'))) best = doc;
+            }
+          }
+          // Fallback: use first file with URL
+          if (!best) best = filesWithUrl[0];
+          if (best) {
+            parsed.send_document = best.file_url;
+            console.log(`🔧 Safety net: auto-set send_document to "${best.name}" (AI forgot to set it)`);
+          }
+        }
+      } catch (e) {
+        console.warn('⚠️ Safety net lookup failed:', e.message);
+      }
+    }
+  }
+
   return parsed;
 }
 
