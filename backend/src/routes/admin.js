@@ -584,12 +584,13 @@ router.post('/send', async (req, res) => {
 
     if (!resolvedTemplateName) {
       existingLead = await db.getLeadByPhone(normalizedPhone).catch(() => null);
-      // Meta's 24h rule is about whether the USER has messaged US, not
-      // whether we have any row in our leads table. A contact we created
-      // by sending an outbound template still can't receive free-form
-      // until they reply. Check for any inbound (role='user') message.
-      const hasInbound = await db.hasInboundFromPhone(normalizedPhone);
-      const isOutsideFreeFormWindow = !hasInbound;
+      // Meta's 24h rule: free-form text only delivers if the USER has
+      // sent us an INBOUND message in the last 24 hours. Outside that
+      // window (or never), Meta silently drops the message with HTTP
+      // 200 success but no delivery. Check the conversations table for
+      // recent inbound messages and fall back to a template if none.
+      const hasRecentInbound = await db.hasRecentInboundFromPhone(normalizedPhone, 24);
+      const isOutsideFreeFormWindow = !hasRecentInbound;
       if (isOutsideFreeFormWindow) {
         const s = loadSettings();
         if (s.default_template_name && s.default_template_name.trim()) {
@@ -602,9 +603,10 @@ router.post('/send', async (req, res) => {
           } else {
             resolvedTemplateParams = rawParams.length ? rawParams : resolvedTemplateParams;
           }
-          console.log(`🔄 AUTO-TEMPLATE: ${existingLead ? 'no inbound from contact yet' : 'new contact'} → using default template "${resolvedTemplateName}" with params [${resolvedTemplateParams.join(', ')}]`);
+          const reason = !existingLead ? 'new contact' : 'last inbound > 24h ago (or never)';
+          console.log(`🔄 AUTO-TEMPLATE: ${reason} → using default template "${resolvedTemplateName}" with params [${resolvedTemplateParams.join(', ')}]`);
         } else {
-          console.warn(`⚠️  No inbound from ${normalizedPhone} and no default_template_name configured — Meta will silently drop free-form text (24h rule).`);
+          console.warn(`⚠️  ${normalizedPhone} outside 24h window and no default_template_name configured — Meta will silently drop free-form text.`);
         }
       }
     }

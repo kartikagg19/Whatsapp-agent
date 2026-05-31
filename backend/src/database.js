@@ -130,23 +130,33 @@ async function getCostStats() {
   return { total, avgPerConversation, perLead, totalConversations: perLead.length };
 }
 
-// Returns true if this phone has EVER sent us an inbound message
-// (role='user'). Used to decide if a free-form WhatsApp send is allowed
-// per Meta's 24h rule — if false, we must use a template instead.
-async function hasInboundFromPhone(phone) {
+// Returns true if this phone has sent us an inbound message within
+// Meta's free-form delivery window (24 hours). Used by /api/send to
+// decide whether free-form text is allowed or we must use a template.
+//
+// Meta silently drops free-form sends to phones outside the 24h
+// window (HTTP 200 from the API, but no delivery), so this check is
+// the line between "delivered" and "lost".
+async function hasRecentInboundFromPhone(phone, windowHours = 24) {
+  const cutoff = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
   const { count, error } = await getDB().from('conversations')
     .select('id', { count: 'exact', head: true })
     .eq('phone', phone)
-    .eq('role', 'user');
+    .eq('role', 'user')
+    .gte('created_at', cutoff);
   if (error) {
-    // On error, assume "unknown" → caller should treat as new (safer:
-    // sending a template to an existing contact wastes a template send
-    // but always delivers, whereas sending free-form to a new number
-    // silently drops).
-    console.warn(`hasInboundFromPhone(${phone}) failed: ${error.message}`);
+    // On error, assume "outside window" — safer to send a template
+    // (always delivers) than free-form (might silently drop).
+    console.warn(`hasRecentInboundFromPhone(${phone}) failed: ${error.message}`);
     return false;
   }
   return (count || 0) > 0;
+}
+
+// Kept as a thin alias for callers that only care "has ever messaged".
+// Currently unused after the 24h-window switch; safe to remove later.
+async function hasInboundFromPhone(phone) {
+  return hasRecentInboundFromPhone(phone, 24 * 365); // ~1 year
 }
 
 async function getHistory(phone, limit = 20) {
@@ -190,53 +200,96 @@ async function deleteKnowledge(id) {
   if (error) throw error;
 }
 
+// Build a snapshot of every project in the knowledge base shaped for
+// the v2.7 prompt's Block 0 placeholders:
+//   - project_knowledge_base : per-project facts (from the .json file
+//     uploaded for each project, parsed)
+//   - pdf_document_database  : per-project list of { doc_type, label,
+//     supabase_url } derived from PDF rows
+//   - image_database         : per-project list of { image_type,
+//     label, supabase_url, format } derived from image rows
+//
+// Multi-project bot: we emit ONE section per project, each containing
+// all three blocks for that project, so the model can pick the right
+// one based on which project the user is asking about.
+//
+// Returns: a single big string ready to drop into the system prompt.
 async function getKnowledgeText() {
   try {
+    const { buildMediaDatabases } = require('./mediaTypes');
     const docs = await getKnowledgeBase();
     if (!docs.length) return '';
 
-    // Split into grouped (by project) and ungrouped
-    const byGroup = {};
+    const byGroup = new Map();
     const ungrouped = [];
-    for (const doc of docs) {
-      if (doc.project_group) {
-        if (!byGroup[doc.project_group]) byGroup[doc.project_group] = [];
-        byGroup[doc.project_group].push(doc);
+    for (const d of docs) {
+      const g = (d.project_group || '').trim();
+      if (g) {
+        if (!byGroup.has(g)) byGroup.set(g, []);
+        byGroup.get(g).push(d);
       } else {
-        ungrouped.push(doc);
+        ungrouped.push(d);
       }
     }
 
     const sections = [];
 
-    // Ungrouped text docs (original behavior)
-    const ugText  = ungrouped.filter(d => d.content);
-    const ugFiles = ungrouped.filter(d => d.file_url);
-    if (ugText.length)  sections.push(ugText.map(d => `### ${d.name}\n${d.content}`).join('\n\n---\n\n'));
-    if (ugFiles.length) sections.push(
-      'FILES YOU CAN SEND (set send_document to the file_url when user asks for brochure/unit plan):\n' +
-      ugFiles.map(d => `- ${d.name}: ${d.file_url}`).join('\n')
-    );
+    // Header — index of available projects so the model can quickly
+    // see which projects we have data for.
+    const projectIndex = [...byGroup.keys()].sort();
+    if (projectIndex.length) {
+      sections.push(
+        'AVAILABLE PROJECTS (you can only discuss these — never invent):\n' +
+        projectIndex.map(p => `- ${p}`).join('\n')
+      );
+    }
 
-    // Grouped projects — each project gets its own section
-    for (const [group, items] of Object.entries(byGroup)) {
-      let block = `## PROJECT: ${group}\n`;
+    // Per-project sections.
+    for (const group of projectIndex) {
+      const items = byGroup.get(group);
+      const { pdf_db, image_db } = buildMediaDatabases(items, group);
+
+      // Parse the project JSON file if present, else fall back to a
+      // minimal stub so the AI knows the project exists.
       const jsonDocs = items.filter(d => d.file_type === 'json' && d.content);
-      const textDocs = items.filter(d => d.file_type !== 'json' && d.content && !d.file_url);
-      const fileDocs = items.filter(d => d.file_url);
-
-      // FILES section goes FIRST so AI always sees it
-      if (fileDocs.length) {
-        block += `SENDABLE FILES FOR "${group}" (IMPORTANT — when user asks for brochure, plan, PDF, document, or any file about this project → pick the closest match below and set send_document to its URL):\n`;
-        block += fileDocs.map(d => `  send_document URL for "${d.name}": ${d.file_url}`).join('\n') + '\n\n';
+      let projectKb = { project_name: group };
+      for (const j of jsonDocs) {
+        try { projectKb = { project_name: group, ...JSON.parse(j.content) }; break; }
+        catch { /* malformed json — skip, keep stub */ }
       }
-      if (jsonDocs.length) block += jsonDocs.map(d => `### ${d.name}\n${d.content}`).join('\n\n') + '\n';
-      if (textDocs.length) block += textDocs.map(d => `### ${d.name}\n${d.content}`).join('\n\n') + '\n';
+
+      // Text-only docs (uploaded as raw text / scanned PDFs without
+      // extractable text). Treated as supplementary context.
+      const textDocs = items.filter(d => d.content && d.file_type !== 'json' && !d.file_url);
+
+      let block = `\n━━━━━━━━━━━━━━━━━━━━\nPROJECT BLOCK: ${group}\n━━━━━━━━━━━━━━━━━━━━\n`;
+      block += `project_knowledge_base = ${JSON.stringify(projectKb, null, 2)}\n\n`;
+      block += `pdf_document_database = ${JSON.stringify(pdf_db, null, 2)}\n\n`;
+      block += `image_database = ${JSON.stringify(image_db, null, 2)}\n`;
+      if (textDocs.length) {
+        block += `\nSUPPLEMENTARY NOTES:\n` +
+          textDocs.map(d => `### ${d.name}\n${d.content}`).join('\n\n');
+      }
       sections.push(block);
     }
 
+    // Ungrouped legacy rows — keep at the end as plain context. Bot
+    // can read them but they don't participate in media dispatch.
+    if (ungrouped.length) {
+      const ugText = ungrouped.filter(d => d.content);
+      if (ugText.length) {
+        sections.push(
+          'UNGROUPED NOTES:\n' +
+          ugText.map(d => `### ${d.name}\n${d.content}`).join('\n\n---\n\n')
+        );
+      }
+    }
+
     return sections.join('\n\n---\n\n');
-  } catch { return ''; }
+  } catch (e) {
+    console.warn('⚠️ getKnowledgeText failed:', e.message);
+    return '';
+  }
 }
 
 // Upload file buffer to Supabase Storage
@@ -299,4 +352,26 @@ async function saveAppSettings(settingsObj) {
   if (error) throw error;
 }
 
-module.exports = { getDB, upsertLead, getAllLeads, getLeadByPhone, getStats, getAllCampaigns, saveMessage, getHistory, getConversations, hasInboundFromPhone, getKnowledgeBase, addKnowledge, deleteKnowledge, getKnowledgeText, uploadToStorage, getLeadsForFollowUp, markFollowUpSent, getCostStats, getAppSettings, saveAppSettings };
+module.exports = {
+  getDB,
+  upsertLead,
+  getAllLeads,
+  getLeadByPhone,
+  getStats,
+  getAllCampaigns,
+  saveMessage,
+  getHistory,
+  getConversations,
+  hasInboundFromPhone,
+  hasRecentInboundFromPhone,
+  getKnowledgeBase,
+  addKnowledge,
+  deleteKnowledge,
+  getKnowledgeText,
+  uploadToStorage,
+  getLeadsForFollowUp,
+  markFollowUpSent,
+  getCostStats,
+  getAppSettings,
+  saveAppSettings
+};
