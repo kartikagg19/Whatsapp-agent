@@ -93,9 +93,10 @@ function parseMessage(body) {
   } catch { return null; }
 }
 
-// Detect if a URL is an image based on extension
+// Detect if a URL is an image based on extension (handles URL-encoded filenames)
 function isImageUrl(url) {
-  return /\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(url);
+  const decoded = decodeURIComponent(url);
+  return /\.(jpe?g|png|gif|webp|bmp)(\?|#|$)/i.test(decoded);
 }
 
 // Send an image from a public URL

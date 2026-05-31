@@ -330,18 +330,46 @@ async function runPipeline(phone, buf) {
 }
 
 async function sendDocumentSafe(phone, url) {
-  const docName = decodeURIComponent(url.split('/').pop()) || 'document';
-  try {
-    if (isImageUrl(url)) {
+  // Decode the filename for display; handle URL-encoded spaces
+  const rawName = url.split('/').pop() || 'document';
+  const docName = decodeURIComponent(rawName);
+  const isImg   = isImageUrl(url);
+
+  console.log(`📤 Sending ${isImg ? 'image' : 'document'}: ${docName}`);
+
+  if (isImg) {
+    // Try as WhatsApp image first (shows inline in chat)
+    try {
       await sendImage(phone, url, '');
-      console.log(`🖼️ Image sent: ${docName}`);
-    } else {
-      await sendDocument(phone, url, docName, '');
-      console.log(`📎 Document sent: ${docName}`);
+      console.log(`🖼️ Image sent OK: ${docName}`);
+      return;
+    } catch (e) {
+      const err = e.response?.data?.error || e.message || '';
+      console.warn(`⚠️ Image send failed (${err}), retrying as document...`);
     }
+    // Fallback: send image as document (still downloadable, no size limit issue)
+    try {
+      await sendDocument(phone, url, docName, '');
+      console.log(`📎 Image sent as document: ${docName}`);
+      return;
+    } catch (e) {
+      const err = e.response?.data?.error?.message || e.message || '';
+      console.error(`❌ Document fallback also failed: ${err}`);
+      await sendText(phone, `📸 ${docName.replace(/\.(jpe?g|png)$/i,'')}\n\nYahan se dekh sakte hain:\n${url}`).catch(() => {});
+      return;
+    }
+  }
+
+  // PDF / other document
+  try {
+    await sendDocument(phone, url, docName, '');
+    console.log(`📎 Document sent OK: ${docName}`);
   } catch (e) {
-    console.warn('⚠️ File send failed:', e.message);
-    await sendText(phone, 'Ek second ji, file bhejne mein thoda issue aa gaya. Main abhi team ko forward kar rahi hoon, wo aapko jaldi share karenge. 🙏').catch(() => {});
+    const errObj = e.response?.data?.error;
+    const errMsg = errObj?.message || e.message || '';
+    console.error(`❌ Document send failed: ${errMsg}`, errObj || '');
+    // Send the URL as plain text so user at least gets the link
+    await sendText(phone, `📄 *${docName.replace(/\.pdf$/i,'')}*\n\nYahan se download karein:\n${url}`).catch(() => {});
   }
 }
 
