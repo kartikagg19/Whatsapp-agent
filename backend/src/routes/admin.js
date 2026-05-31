@@ -195,6 +195,43 @@ router.get('/kb-debug', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// POST /api/system-prompt — update the system prompt (used by push_prompt.js
+// and by the push-from-URL flow when local Node can't reach Supabase from
+// the operator's machine). Body: { prompt: "<full text>" }
+// Auth: standard dashboard Bearer token (requireAuth catches it).
+router.post('/system-prompt', async (req, res) => {
+  try {
+    const prompt = req.body && req.body.prompt;
+    if (typeof prompt !== 'string' || !prompt.trim()) {
+      return res.status(400).json({ error: 'prompt (string) required in body' });
+    }
+    const current  = loadSettings();
+    const oldLen   = (current.system_prompt || '').length;
+    const updated  = { ...current, system_prompt: prompt };
+    writeSettingsFile(updated);
+    try {
+      await db.saveAppSettings(updated);
+    } catch (e) {
+      return res.json({
+        success: true,
+        persisted_to_db: false,
+        warning: e.message,
+        old_length: oldLen,
+        new_length: prompt.length,
+      });
+    }
+    console.log(`✍️  system_prompt updated via API: ${oldLen} → ${prompt.length} chars`);
+    res.json({
+      success: true,
+      persisted_to_db: true,
+      old_length: oldLen,
+      new_length: prompt.length,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/ai-test — verify Gemini API key works
 router.get('/ai-test', async (req, res) => {
   try {
