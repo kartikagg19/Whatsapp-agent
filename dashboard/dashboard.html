@@ -799,11 +799,12 @@ const LoginPage = ({onLogin}) => {
     if(!base){setErr('Enter your backend URL');return;}
     setBusy(true);
     try{
-      const r=await fetch(`${base}/api/stats`);
+      const r=await fetch(`${base}/api/access`);
       if(r.ok){
+        const d=await r.json();
         localStorage.setItem('pa_api',base+'/api');
-        localStorage.removeItem('pa_token');
-        onLogin(base+'/api','');
+        localStorage.setItem('pa_token',d.token||'');
+        onLogin(base+'/api',d.token||'');
       } else {
         setErr(`Cannot connect — server returned ${r.status}`);
       }

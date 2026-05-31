@@ -152,7 +152,7 @@ function getToken() {
 }
 
 function requireAuth(req, res, next) {
-  if (req.path === '/login' || req.path === '/stats' || req.path === '/whatsapp-test' || req.path === '/ai-test' || req.path === '/send' || req.path === '/kb-debug' || req.path === '/export/csv') return next();
+  if (req.path === '/login' || req.path === '/access' || req.path === '/stats' || req.path === '/whatsapp-test' || req.path === '/ai-test' || req.path === '/send' || req.path === '/kb-debug' || req.path === '/export/csv') return next();
   const token = (req.headers['authorization'] || '').replace('Bearer ', '').trim();
   if (!token || token !== getToken()) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -171,6 +171,11 @@ router.post('/login', (req, res) => {
     return res.json({ success: true, token: getToken() });
   }
   res.status(401).json({ error: 'Invalid email or password' });
+});
+
+// GET /api/access — URL-only auth: knowing the backend URL is enough to get a token
+router.get('/access', (req, res) => {
+  res.json({ success: true, token: getToken() });
 });
 
 // GET /api/kb-debug — show what AI sees in knowledge base (file_url check)
