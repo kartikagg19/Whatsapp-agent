@@ -45,15 +45,24 @@ const IMAGE_TYPES = [
 // Ordered: first regex that matches wins. Specific patterns before
 // generic ones (e.g. "sale chart" before "chart").
 
+// Order matters — first match wins. More specific patterns must come
+// before generic ones (e.g. "site visit guide" before any "site").
 const DOC_TYPE_PATTERNS = [
-  { type: 'brochure',         re: /brochur/i },
-  { type: 'floor_plan',       re: /floor\s*plan|unit\s*plan|layout\s*plan|naksha/i },
-  { type: 'price_sheet',      re: /cost\s*sheet|price\s*sheet|sale\s*chart|rate\s*card|pricing/i },
-  { type: 'payment_plan',     re: /payment\s*(plan|schedule)|emi\s*plan|installment/i },
-  { type: 'rera_certificate', re: /rera/i },
-  { type: 'location_map',     re: /location\s*map|connectivity\s*map|site\s*map/i },
-  { type: 'cp_kit',           re: /cp\s*kit|partner\s*kit|channel\s*partner/i },
   { type: 'site_visit_guide', re: /site\s*visit\s*guide|visit\s*guide/i },
+  { type: 'rera_certificate', re: /\brera\b/i },
+  { type: 'payment_plan',     re: /payment\s*(plan|schedule)|emi\s*plan|installment/i },
+  // price_sheet — includes "sale plan", "sale chart", "area statement",
+  // "saleable area". A "sale plan" in this dataset is a per-unit pricing
+  // + area breakdown, not a layout drawing.
+  { type: 'price_sheet',      re: /cost\s*sheet|price\s*sheet|sale\s*chart|sale\s*plan|saleable\s*area|area\s*statement|rate\s*card|pricing|price\s*list/i },
+  // location_map — "location layout map" must match here, before
+  // floor_plan (which contains "layout").
+  { type: 'location_map',     re: /location\s*(layout\s*)?map|connectivity\s*map|site\s*map|location\s*plan/i },
+  // floor_plan — actual layout drawings. "furniture plan" goes here
+  // because it's a per-unit furniture/room layout.
+  { type: 'floor_plan',       re: /floor\s*plan|unit\s*plan|layout\s*plan|furniture\s*plan|naksha/i },
+  { type: 'cp_kit',           re: /cp\s*kit|partner\s*kit|channel\s*partner/i },
+  { type: 'brochure',         re: /brochur/i },
 ];
 
 const IMAGE_TYPE_PATTERNS = [
