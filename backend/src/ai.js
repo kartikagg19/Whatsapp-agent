@@ -398,13 +398,23 @@ async function applySafetyNet(parsed, userMessage, history) {
   const histBlob = (history || []).map(h => (h.content || '').toLowerCase()).join('\n');
 
   const sayingSending = /bhej\s*rahi|bhej\s*raha|share\s*kar\s*r|sending|sharing|yeh\s*lo|dekh\s*lo|attach|file\s*bhej|brochure\s*bhej|pdf\s*bhej|document\s*bhej|aa\s*raha\s*hai|aa\s*rahi\s*hai/i;
-  const userWantsFile = /brochure|pdf|document|file|image|photo|picture|render|elevation|layout|cost\s*sheet|unit\s*plan|floor\s*plan|price\s*list|site\s*plan|location\s*map|naksha|bhej|dikhao|share|chahiye/i;
-  const refusalHint   = /(nahi\s*bhej|nahi\s*hai|nahi\s*sakti|nai\s*sakti|cannot|can't|unable|sirf\s*pdf|only\s*pdf|share\s*nahi|available\s*nahi)/i;
+  // CAPABILITY refusals only — the AI claims it CAN'T (a falsehood we
+  // want to rescue). "X available nahi hai" is NOT a capability refusal,
+  // it's an honest answer; we never want to override it.
+  const capabilityRefusal = /(image\s*bhej\s*nahi|photo\s*bhej\s*nahi|sirf\s*pdf|only\s*pdf|share\s*nahi\s*kar\s*sakt|whatsapp\s*pe.*nahi|cannot\s*send|can't\s*send|unable\s*to\s*send)/i;
 
-  const shouldRescue =
-    sayingSending.test(reply) ||
-    (userWantsFile.test(userText) && refusalHint.test(reply));
+  const shouldRescue = sayingSending.test(reply) || capabilityRefusal.test(reply);
   if (!shouldRescue) return;
+
+  // Skip if the AI honestly told the user the requested thing isn't
+  // available. Pattern matches "X abhi available nahi" / "X hamare paas
+  // nahi" / "X nahi hai" near a file-shaped noun — phrases the AI uses
+  // when it correctly couldn't find a matching file in the KB.
+  const honestNotAvailable = /(available\s*nahi|hamare\s*paas\s*nahi|paas\s*nahi\s*hai|nahi\s*hai\s+abhi|confirm\s*karke\s*(?:batati|bhejti|bata\s*dungi))/i;
+  if (honestNotAvailable.test(reply) && !sayingSending.test(reply)) {
+    console.log('🔧 Safety net: AI gave honest "not available" — trusting it, no rescue');
+    return;
+  }
 
   const rows = await getKnowledgeBase();
   const filesWithUrl = rows.filter(r => r.file_url);
@@ -485,8 +495,14 @@ async function applySafetyNet(parsed, userMessage, history) {
     if (p) pickedDocs.add(p);
   }
 
-  // Generic priority within project if we picked nothing yet.
-  if (pickedDocs.size === 0 && pickedImages.size === 0) {
+  const hadSpecificIntent = wantsImage || wantsBrochure || wantsCost || wantsFloor || wantsPayment;
+
+  // Generic priority fallback runs ONLY if the user didn't express a
+  // specific intent (e.g. "sab bhejo", or AI said "bhej rahi" without
+  // user asking for anything specific). Avoids the failure mode where
+  // user asked for "brochure" Vista doesn't have → we'd dump a random
+  // sale chart + render at them.
+  if (!hadSpecificIntent && pickedDocs.size === 0 && pickedImages.size === 0) {
     const priorityPdf   = ['brochure','price_sheet','floor_plan','payment_plan','site_visit_guide'];
     const priorityImage = ['elevation','render','site_photo'];
     for (const p of priorityPdf)   { const t = matchType('pdf', p);   if (t) { pickedDocs.add(t);   break; } }
@@ -494,7 +510,7 @@ async function applySafetyNet(parsed, userMessage, history) {
   }
 
   if (pickedDocs.size === 0 && pickedImages.size === 0) {
-    console.log(`🔧 Safety net: no matching files in KB for project="${bestProject}" intent`);
+    console.log(`🔧 Safety net: no matching files for project="${bestProject}" intent — staying quiet`);
     return;
   }
 

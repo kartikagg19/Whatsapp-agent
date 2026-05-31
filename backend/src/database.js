@@ -262,7 +262,16 @@ async function getKnowledgeText() {
       // extractable text). Treated as supplementary context.
       const textDocs = items.filter(d => d.content && d.file_type !== 'json' && !d.file_url);
 
+      // Whitelist of types this project ACTUALLY has — stops the
+      // model from inventing types ("render") when only one exists
+      // ("elevation"). The model must pick from this list verbatim.
+      const availableDocs   = [...new Set(pdf_db.documents.map(d => d.doc_type))];
+      const availableImages = [...new Set(image_db.images.map(i => i.image_type))];
+
       let block = `\n━━━━━━━━━━━━━━━━━━━━\nPROJECT BLOCK: ${group}\n━━━━━━━━━━━━━━━━━━━━\n`;
+      block += `available_documents = ${JSON.stringify(availableDocs)}\n`;
+      block += `available_images    = ${JSON.stringify(availableImages)}\n`;
+      block += `(★ For "${group}", documents_to_attach[] entries MUST be picked from available_documents only; images_to_attach[] entries MUST be picked from available_images only. If a user asks for a type not in these lists, say "yeh abhi available nahi hai — confirm karke bhejti hoon" and leave the array empty. NEVER invent a type.)\n\n`;
       block += `project_knowledge_base = ${JSON.stringify(projectKb, null, 2)}\n\n`;
       block += `pdf_document_database = ${JSON.stringify(pdf_db, null, 2)}\n\n`;
       block += `image_database = ${JSON.stringify(image_db, null, 2)}\n`;
