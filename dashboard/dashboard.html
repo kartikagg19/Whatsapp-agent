@@ -795,7 +795,7 @@ const LoginPage = ({onLogin}) => {
 
   async function connect(){
     setErr('');
-    const base=(url||'').trim().replace(/\/+$/,'');
+    const base=(url||'').trim().replace(/\/+$/,'').replace(/\/api$/i,'');
     if(!base){setErr('Enter your backend URL');return;}
     setBusy(true);
     try{
