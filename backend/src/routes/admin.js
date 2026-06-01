@@ -325,10 +325,11 @@ router.get('/stats', async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// GET /api/leads — all leads
+// GET /api/leads — all leads (default 5000, pass ?limit=N to override)
 router.get('/leads', async (req, res) => {
   try {
-    let leads = await db.getAllLeads();
+    const limit = parseInt(req.query.limit) || 5000;
+    let leads = await db.getAllLeads(limit);
     if (req.query.label) leads = leads.filter(l => l.label === req.query.label.toUpperCase());
     res.json({ success: true, count: leads.length, data: leads });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -337,7 +338,7 @@ router.get('/leads', async (req, res) => {
 // GET /api/export/full — all leads + all conversations for Excel export
 router.get('/export/full', async (req, res) => {
   try {
-    const leads = await db.getAllLeads(2000);
+    const leads = await db.getAllLeads(5000);
     const results = [];
     const batchSize = 10;
     for (let i = 0; i < leads.length; i += batchSize) {
@@ -368,7 +369,7 @@ router.get('/export/full', async (req, res) => {
 // GET /api/export/csv — downloads CSV directly from server (one row per user, each message in its own column)
 router.get('/export/csv', async (req, res) => {
   try {
-    const leads = await db.getAllLeads(2000);
+    const leads = await db.getAllLeads(5000);
 
     // Fetch all conversations
     const grouped = {};

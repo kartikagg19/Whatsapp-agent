@@ -45,7 +45,7 @@ async function upsertLead({ phone, name, score, label, intent, budget_range, loc
   }
 }
 
-async function getAllLeads(limit = 200) {
+async function getAllLeads(limit = 5000) {
   const { data, error } = await getDB().from('leads').select('*').order('updated_at', { ascending: false }).limit(limit);
   if (error) throw error;
   return data || [];
