@@ -587,7 +587,16 @@ const ConnectModal = ({apiBase,setApiBase,onClose,showToast}) => {
 /* ─── OVERVIEW PAGE ───────────────────────────────────────────── */
 const Overview = ({stats,leads,loading,onSelect,isDemo}) => {
   const recent=leads.slice(0,8);
-  const s=stats||DEMO_STATS;
+  // Always compute from live leads array — stats API is a secondary source
+  const hotLeads  = leads.filter(l=>l.label==='HOT').length;
+  const warmLeads = leads.filter(l=>l.label==='WARM').length;
+  const coldLeads = leads.filter(l=>l.label==='COLD').length;
+  const s = isDemo ? DEMO_STATS : {
+    total: leads.length || stats?.total || 0,
+    hot:   hotLeads  || stats?.hot  || 0,
+    warm:  warmLeads || stats?.warm || 0,
+    cold:  coldLeads || stats?.cold || 0
+  };
   const statCards=[
     {label:'Total Leads',val:s.total,meta:'all time'},
     {label:'Hot Leads',  val:s.hot,  meta:'ready to convert'},
