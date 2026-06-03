@@ -17,6 +17,7 @@ const express = require('express');
 const router  = express.Router();
 const { sendText, markRead, markReadWithTyping, parseMessage } = require('../whatsapp');
 const { syncTimeline } = require('../crmClient');
+const { upsertLead: sfUpsertLead, logTask: sfLogTask } = require('../salesforce');
 const { enqueueInbound } = require('../orchestrator');
 const db = require('../database');
 
@@ -66,6 +67,11 @@ router.post('/', async (req, res) => {
   db.saveMessage({ phone, role: 'user', message: text })
     .catch(e => console.warn('⚠️ saveMessage failed:', e.message));
   syncTimeline({ phone, direction: 'inbound', message: text, call_id: `wa-in-${messageId}` })
+    .catch(() => {});
+
+  // Salesforce: upsert Lead (creates if first-time) + log inbound Task
+  sfUpsertLead({ phone, name, score: 3, label: 'COLD', intent: 'general' })
+    .then(sfLeadId => sfLogTask({ phone, leadId: sfLeadId, message: text, direction: 'inbound' }))
     .catch(() => {});
 
   // Hand off to the orchestrator (buffering + cancellation + chunked send).

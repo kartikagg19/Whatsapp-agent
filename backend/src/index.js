@@ -6,9 +6,10 @@ const express = require('express');
 const cors    = require('cors');
 const morgan  = require('morgan');
 
-const webhookRouter   = require('./routes/webhook');
-const adminRouter     = require('./routes/admin');
-const analyticsRouter = require('./routes/analytics');
+const webhookRouter      = require('./routes/webhook');
+const adminRouter        = require('./routes/admin');
+const analyticsRouter    = require('./routes/analytics');
+const salesforceRouter   = require('./routes/salesforce');
 const { startFollowUpScheduler } = require('./followup');
 const { startAnalyzerWorker }    = require('./analyzerWorker');
 
@@ -28,8 +29,9 @@ app.use(express.json());
 app.use('/webhook', webhookRouter);
 // Analytics mounted BEFORE admin so /api/analytics/* never falls through
 // to adminRouter's catch-all 404 handler (if any).
-app.use('/api/analytics', analyticsRouter);
-app.use('/api',           adminRouter);
+app.use('/api/analytics',  analyticsRouter);
+app.use('/api/salesforce', salesforceRouter);
+app.use('/api',            adminRouter);
 
 app.get('/', (req, res) => res.json({
   status:  'online',

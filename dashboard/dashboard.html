@@ -787,28 +787,32 @@ function apiFetch(url, opts={}){
 }
 
 /* ─── LOGIN PAGE ──────────────────────────────────────────────── */
+const BACKEND_URL='https://whatsapp-agent-production-3525.up.railway.app/api';
+const ACCESS_PASSWORD='8880';
+
 const LoginPage = ({onLogin}) => {
-  const savedApi=localStorage.getItem('pa_api')||'';
-  const [url,setUrl]=useState(savedApi);
+  const [pwd,setPwd]=useState('');
   const [err,setErr]=useState('');
   const [busy,setBusy]=useState(false);
+  const [show,setShow]=useState(false);
 
   async function connect(){
     setErr('');
-    const base=(url||'').trim().replace(/\/+$/,'').replace(/\/api$/i,'');
-    if(!base){setErr('Enter your backend URL');return;}
+    if(!pwd.trim()){setErr('Enter your password');return;}
+    if(pwd.trim()!==ACCESS_PASSWORD){setErr('Incorrect password');return;}
     setBusy(true);
     try{
-      const r=await fetch(`${base}/api/access`);
+      const r=await fetch(`${BACKEND_URL}/access`);
       if(r.ok){
         const d=await r.json();
-        localStorage.setItem('pa_api',base+'/api');
+        localStorage.setItem('pa_api',BACKEND_URL);
         localStorage.setItem('pa_token',d.token||'');
-        onLogin(base+'/api',d.token||'');
+        localStorage.setItem('pa_auth','1');
+        onLogin(BACKEND_URL,d.token||'');
       } else {
-        setErr(`Cannot connect — server returned ${r.status}`);
+        setErr('Cannot reach server. Try again.');
       }
-    }catch{setErr('Cannot reach server. Check the URL.');}
+    }catch{setErr('Cannot reach server. Check your internet.');}
     setBusy(false);
   }
 
@@ -821,28 +825,29 @@ const LoginPage = ({onLogin}) => {
           h('div',{className:'login-logo-sub'},'Lead Dashboard')
         )
       ),
-      h('div',{className:'login-title'},'Connect your dashboard'),
-      h('div',{className:'login-sub'},'Paste your Railway backend URL to get started'),
+      h('div',{className:'login-title'},'Welcome back'),
+      h('div',{className:'login-sub'},'Enter your password to access the dashboard'),
       err&&h('div',{className:'login-err'},err),
-      h(Field,{label:'Backend URL'},
-        h('input',{
-          type:'url', value:url, autoFocus:true,
-          onChange:e=>{setUrl(e.target.value);setErr('');},
-          placeholder:'https://your-app.up.railway.app',
-          onKeyDown:e=>e.key==='Enter'&&connect()
-        })
-      ),
-      h('div',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)',marginBottom:'16px',marginTop:'-8px'}},
-        'Example: https://whatsapp-agent-production-3525.up.railway.app'
+      h(Field,{label:'Password'},
+        h('div',{style:{position:'relative'}},
+          h('input',{
+            type:show?'text':'password',
+            value:pwd,
+            autoFocus:true,
+            onChange:e=>{setPwd(e.target.value);setErr('');},
+            placeholder:'Enter password',
+            onKeyDown:e=>e.key==='Enter'&&connect(),
+            style:{width:'100%',paddingRight:'40px'}
+          }),
+          h('button',{
+            type:'button',
+            onClick:()=>setShow(!show),
+            style:{position:'absolute',right:'10px',top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--text3)',padding:'0'}
+          },h('i',{className:`ti ${show?'ti-eye-off':'ti-eye'}`}))
+        )
       ),
       h('button',{className:'btn btn-primary',style:{width:'100%',justifyContent:'center',padding:'10px',fontSize:'14px'},onClick:connect,disabled:busy},
-        busy?h(Spinner):h('i',{className:'ti ti-plug'}),' ',busy?'Connecting...':'Open Dashboard'),
-      h('div',{style:{textAlign:'center',marginTop:'12px'}},
-        h('button',{className:'btn btn-ghost btn-sm',onClick:()=>{
-          localStorage.removeItem('pa_api');localStorage.removeItem('pa_token');
-          onLogin('DEMO','');
-        }},'Try Demo')
-      )
+        busy?h(Spinner):h('i',{className:'ti ti-lock-open'}),' ',busy?'Opening...':'Open Dashboard')
     )
   );
 };
@@ -2076,11 +2081,10 @@ const CampaignsPage = ({leads,loading,onSelect,isDemo,apiBase,onRefresh}) => {
 
 /* ─── APP ROOT ────────────────────────────────────────────────── */
 function App(){
-  const savedApi=localStorage.getItem('pa_api');
-  const savedToken=localStorage.getItem('pa_token');
-  const [loggedIn, setLoggedIn]=useState(!!(savedApi)||savedApi==='DEMO');
+  const savedAuth=localStorage.getItem('pa_auth');
+  const [loggedIn, setLoggedIn]=useState(savedAuth==='1');
   const [page,     setPage]  =useState('overview');
-  const [apiBase,  setApiBase]=useState(savedApi||'DEMO');
+  const [apiBase,  setApiBase]=useState(BACKEND_URL);
   function handleLogin(base,token){
     setApiBase(base);
     setLoggedIn(true);

@@ -30,6 +30,7 @@ const path = require('path');
 const { getAIReply, getLeadLabel } = require('./ai');
 const { sendText, sendImage, sendDocument, sendButtons, alertSales, isImageUrl } = require('./whatsapp');
 const { syncTimeline } = require('./crmClient');
+const { upsertLead: sfUpsertLead, logTask: sfLogTask } = require('./salesforce');
 const { splitReply } = require('./chunker');
 const { analyzeExchange } = require('./analyzer');
 const { resolveTypeToRows } = require('./mediaTypes');
@@ -189,7 +190,7 @@ async function runPipeline(phone, buf) {
   let history = [], existingLead = null;
   try {
     [history, existingLead] = await Promise.all([
-      db.getHistory(phone, 20),
+      db.getHistory(phone, 10),
       db.getLeadByPhone(phone)
     ]);
   } catch (e) {
@@ -317,6 +318,17 @@ async function runPipeline(phone, buf) {
       ai_score: (typeof ai.lead_score === 'number' && isFinite(ai.lead_score)) ? Math.round(ai.lead_score * 10) : null,
       intent: ai.qualification_stage, qualified: !!ai.qualified, summary: ai.summary,
       profile_patch: { budget_range: ai.budget_range }
+    }).catch(() => {});
+
+    // ── Salesforce sync (fire-and-forget) ───────────────────────────
+    // Upsert the Lead with latest score/label, then log the bot reply
+    // as a completed Task on the Lead's activity timeline.
+    sfUpsertLead({
+      phone, name, score: ai.lead_score, label,
+      intent:     ai.qualification_stage || 'general',
+      site_visit: ai.site_visit || 'not_discussed'
+    }).then(sfLeadId => {
+      sfLogTask({ phone, leadId: sfLeadId, message: ai.reply_message, direction: 'outbound' });
     }).catch(() => {});
 
     // ── Campaign Intelligence — fire-and-forget Layer 1 analysis ────
