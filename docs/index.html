@@ -1519,7 +1519,7 @@ const CostsPage = ({apiBase,isDemo}) => {
 
 /* ─── CAMPAIGN INTELLIGENCE PAGE ─────────────────────────────── */
 const CampaignIntelPage = ({apiBase,isDemo,showToast}) => {
-  const [tab,setTab] = useState('overview');
+  const [tab,setTab] = useState('daywise');
   const [overview,setOverview] = useState(null);
   const [funnel,setFunnel] = useState([]);
   const [issues,setIssues] = useState([]);
@@ -1583,6 +1583,7 @@ const CampaignIntelPage = ({apiBase,isDemo,showToast}) => {
   if (loading && !overview) return h('div',{className:'empty'},h(Spinner));
 
   const TABS = [
+    {k:'daywise',     l:'Day-wise Campaigns', icon:'ti-calendar-stats'},
     {k:'overview',    l:'Overview',         icon:'ti-layout-dashboard'},
     {k:'funnel',      l:'Sales Funnel',     icon:'ti-filter'},
     {k:'issues',      l:'Issues',           icon:'ti-alert-triangle'},
@@ -1592,6 +1593,95 @@ const CampaignIntelPage = ({apiBase,isDemo,showToast}) => {
     {k:'objections',  l:'Objections',       icon:'ti-message-2'},
     {k:'queue',       l:'Review Queue',     icon:'ti-checks'}
   ];
+
+  // ── Day-wise Campaigns panel ──
+  const DAYWISE_CAMPAIGNS = [
+    {day:'Day 1', leads:100,  color:'#6366F1'},
+    {day:'Day 2', leads:200,  color:'#8B5CF6'},
+    {day:'Day 3', leads:400,  color:'#EC4899'},
+    {day:'Day 4', leads:250,  color:'#F59E0B'},
+    {day:'Day 5', leads:150,  color:'#10B981'},
+  ];
+  const maxLeads = Math.max(...DAYWISE_CAMPAIGNS.map(d=>d.leads));
+  const totalLeads = DAYWISE_CAMPAIGNS.reduce((s,d)=>s+d.leads,0);
+
+  const daywisePanel = h('div',null,
+    h('div',{className:'stats-row',style:{gridTemplateColumns:'repeat(3,1fr)',gap:'12px',marginBottom:'20px'}},
+      metricCard('Total Campaigns','5','across 5 days'),
+      metricCard('Total Leads',totalLeads,'all campaigns'),
+      metricCard('Peak Day','Day 3 — 400','highest lead day')
+    ),
+    h('div',{className:'card'},
+      h('div',{className:'card-hd'},
+        h('span',{className:'card-title'},'Campaign Lead Distribution — Day wise'),
+        h('span',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)'}},`Total: ${totalLeads} leads`)
+      ),
+      h('div',{className:'card-bd'},
+        DAYWISE_CAMPAIGNS.map(c=>
+          h('div',{key:c.day,style:{marginBottom:'18px'}},
+            h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}},
+              h('div',{style:{display:'flex',alignItems:'center',gap:'8px'}},
+                h('div',{style:{width:'10px',height:'10px',borderRadius:'50%',background:c.color}}),
+                h('span',{style:{fontWeight:700,fontSize:'14px'}},c.day)
+              ),
+              h('div',{style:{display:'flex',alignItems:'center',gap:'12px'}},
+                h('span',{style:{fontFamily:'var(--mono)',fontWeight:700,fontSize:'15px',color:c.color}},c.leads,' leads'),
+                h('span',{style:{fontFamily:'var(--mono)',fontSize:'11px',color:'var(--text3)'}},(c.leads/totalLeads*100).toFixed(1),'%')
+              )
+            ),
+            h('div',{style:{height:'28px',background:'var(--surface2)',borderRadius:'8px',overflow:'hidden',position:'relative'}},
+              h('div',{style:{
+                height:'100%',
+                width:`${(c.leads/maxLeads*100).toFixed(1)}%`,
+                background:c.color,
+                borderRadius:'8px',
+                transition:'width 0.6s ease',
+                display:'flex',alignItems:'center',justifyContent:'flex-end',paddingRight:'8px'
+              }},
+                c.leads/maxLeads > 0.25 && h('span',{style:{fontSize:'11px',fontWeight:700,color:'#fff'}},c.leads)
+              )
+            )
+          )
+        )
+      )
+    ),
+    h('div',{className:'card',style:{marginTop:'14px'}},
+      h('div',{className:'card-hd'},h('span',{className:'card-title'},'Campaign Summary Table')),
+      h('div',{className:'card-bd',style:{padding:'0'}},
+        h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:'13px'}},
+          h('thead',null,h('tr',null,
+            ['Campaign','Leads','% of Total','Status'].map(col=>
+              h('th',{key:col,style:{padding:'10px 14px',textAlign:'left',borderBottom:'1px solid var(--border)',color:'var(--text3)',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600,textTransform:'uppercase'}},col)
+            )
+          )),
+          h('tbody',null,
+            DAYWISE_CAMPAIGNS.map((c,i)=>
+              h('tr',{key:c.day,style:{borderBottom:'1px solid var(--border)'}},
+                h('td',{style:{padding:'12px 14px'}},
+                  h('div',{style:{display:'flex',alignItems:'center',gap:'8px'}},
+                    h('div',{style:{width:'8px',height:'8px',borderRadius:'50%',background:c.color}}),
+                    h('span',{style:{fontWeight:600}},c.day,' Campaign')
+                  )
+                ),
+                h('td',{style:{padding:'12px 14px',fontFamily:'var(--mono)',fontWeight:700}},c.leads),
+                h('td',{style:{padding:'12px 14px',fontFamily:'var(--mono)',color:'var(--text3)'}},(c.leads/totalLeads*100).toFixed(1),'%'),
+                h('td',{style:{padding:'12px 14px'}},
+                  h('span',{style:{
+                    padding:'2px 10px',
+                    borderRadius:'12px',
+                    fontSize:'11px',
+                    fontWeight:600,
+                    background: c.leads===maxLeads ? '#FEF3C7' : '#F0FDF4',
+                    color: c.leads===maxLeads ? '#92400E' : '#166534'
+                  }}, c.leads===maxLeads ? 'Peak Day' : 'Active')
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  );
 
   const tabBar = h('div',{className:'stab-bar'},
     TABS.map(t => h('button',{key:t.k,className:`stab ${tab===t.k?'active':''}`,onClick:()=>setTab(t.k)},
@@ -1842,6 +1932,7 @@ const CampaignIntelPage = ({apiBase,isDemo,showToast}) => {
   return h('div',null,
     tabBar,
     h('div',{style:{marginTop:'14px'}},
+      tab === 'daywise'    ? daywisePanel  :
       tab === 'overview'   ? overviewPanel :
       tab === 'funnel'     ? funnelPanel   :
       tab === 'issues'     ? issuesPanel   :
