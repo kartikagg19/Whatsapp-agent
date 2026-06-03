@@ -2059,18 +2059,106 @@ const CampaignsPage = ({leads,loading,onSelect,isDemo,apiBase,onRefresh}) => {
   if(loading) return h('div',{className:'empty'},h(Spinner));
 
   const renameModal = renaming&&h('div',{className:'overlay',onClick:e=>e.target===e.currentTarget&&setRenaming(null)},
-    h('div',{className:'modal',style:{maxWidth:'420px'}},
+    h('div',{className:'modal',style:{maxWidth:'480px'}},
       h('div',{className:'modal-hd'},
-        h('div',null,h('div',{className:'modal-hd-title'},'Rename Campaign'),h('div',{className:'modal-hd-sub'},`All leads in "${renaming.from}" will be updated`)),
+        h('div',null,
+          h('div',{className:'modal-hd-title'},'Edit Campaign — ',renaming.from),
+          h('div',{className:'modal-hd-sub'},'Update name, target leads, or assign untagged leads')
+        ),
         h('button',{className:'x-btn',onClick:()=>setRenaming(null)},h('i',{className:'ti ti-x'}))
       ),
       h('div',{className:'modal-bd'},
-        h('div',{className:'form-field'},h('label',{className:'form-label'},'New Campaign Name'),
-          h('input',{value:renaming.to,autoFocus:true,onChange:e=>setRenaming(r=>({...r,to:e.target.value})),onKeyDown:e=>e.key==='Enter'&&doRename(),placeholder:'e.g. Day 1 — May 2025'}))
+
+        // ── Section 1: Rename ────────────────────────────
+        h('div',{style:{background:'var(--surface2)',borderRadius:'var(--r)',padding:'14px',marginBottom:'14px'}},
+          h('div',{style:{fontWeight:600,fontSize:'12px',color:'var(--text2)',marginBottom:'10px',display:'flex',alignItems:'center',gap:'6px'}},
+            h('i',{className:'ti ti-pencil',style:{fontSize:'13px'}}), 'Campaign Name'
+          ),
+          h('input',{
+            value:renaming.to,
+            autoFocus:true,
+            onChange:e=>setRenaming(r=>({...r,to:e.target.value})),
+            onKeyDown:e=>e.key==='Enter'&&doRename(),
+            placeholder:'e.g. Day 3',
+            style:{width:'100%'}
+          }),
+          h('div',{style:{fontSize:'11px',color:'var(--text3)',marginTop:'6px'}},
+            'All leads tagged to this campaign will be updated automatically')
+        ),
+
+        // ── Section 2: Target Leads ──────────────────────
+        h('div',{style:{background:'var(--surface2)',borderRadius:'var(--r)',padding:'14px',marginBottom:'14px'}},
+          h('div',{style:{fontWeight:600,fontSize:'12px',color:'var(--text2)',marginBottom:'10px',display:'flex',alignItems:'center',gap:'6px'}},
+            h('i',{className:'ti ti-target',style:{fontSize:'13px'}}), 'Target Leads'
+          ),
+          h('div',{style:{display:'flex',gap:'10px',alignItems:'center'}},
+            h('input',{
+              type:'number',
+              value:renaming.target||'',
+              onChange:e=>setRenaming(r=>({...r,target:e.target.value})),
+              placeholder:'e.g. 400',
+              style:{width:'160px'}
+            }),
+            renaming.actualTotal!=null&&h('span',{style:{fontSize:'12px',color:'var(--text3)',fontFamily:'var(--mono)'}},
+              `Current: ${renaming.actualTotal} leads assigned`)
+          ),
+          h('div',{style:{fontSize:'11px',color:'var(--text3)',marginTop:'6px'}},
+            'Set a target to show progress bar on the campaign card')
+        ),
+
+        // ── Section 3: Assign Leads ──────────────────────
+        untaggedTotal > 0 && h('div',{style:{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'var(--r)',padding:'14px'}},
+          h('div',{style:{fontWeight:600,fontSize:'12px',color:'#1D4ED8',marginBottom:'10px',display:'flex',alignItems:'center',gap:'6px'}},
+            h('i',{className:'ti ti-users-plus',style:{fontSize:'13px'}}), `Assign Untagged Leads → This Campaign`
+          ),
+          h('div',{style:{fontSize:'12px',color:'#1E40AF',marginBottom:'12px'}},
+            h('strong',null,untaggedTotal), ' leads have no campaign assigned. Assign them to "',renaming.to||renaming.from,'" by date or all at once.'
+          ),
+          h('div',{style:{display:'flex',gap:'8px',marginBottom:'12px'}},
+            ['all','date'].map(m=>h('button',{key:m,
+              className:`btn btn-sm ${assignMode===m?'btn-primary':'btn-ghost'}`,
+              onClick:()=>{setAssignMode(m);setAssignName(renaming.to||renaming.from);}
+            }, m==='all'?`All ${untaggedTotal} leads`:'By specific date'))
+          ),
+          assignMode==='date'&&h('div',null,
+            dateCounts.length>0&&h('div',{style:{marginBottom:'10px',maxHeight:'160px',overflowY:'auto',background:'#fff',borderRadius:'6px',border:'1px solid #BFDBFE'}},
+              dateCounts.map((d,i)=>h('div',{key:d.date,onClick:()=>{setAssignDate(d.date);setAssignName(renaming.to||renaming.from);},
+                style:{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 12px',cursor:'pointer',fontSize:'13px',
+                  background:assignDate===d.date?'#DBEAFE':'transparent',
+                  borderBottom:i<dateCounts.length-1?'1px solid #EFF6FF':'none'}},
+                h('span',{style:{fontFamily:'var(--mono)'}},d.date),
+                h('span',{style:{fontFamily:'var(--mono)',fontWeight:600,color:'#1D4ED8'}},`${d.count} leads`)
+              ))
+            ),
+            h('input',{type:'date',value:assignDate,onChange:e=>{setAssignDate(e.target.value);setAssignName(renaming.to||renaming.from);},style:{width:'100%'}})
+          ),
+          h('button',{
+            className:'btn btn-primary btn-sm',
+            style:{marginTop:'10px',width:'100%',justifyContent:'center'},
+            onClick:async()=>{
+              setAssignName(renaming.to||renaming.from);
+              await doAssign();
+              setRenaming(null);
+            },
+            disabled:busy||(assignMode==='date'&&!assignDate)
+          }, busy?h(Spinner):h('i',{className:'ti ti-users-plus'}),
+            assignMode==='date'&&assignDate
+              ? ` Assign ${dateCounts.find(d=>d.date===assignDate)?.count||0} leads from ${assignDate}`
+              : ` Assign all ${untaggedTotal} untagged leads`)
+        )
       ),
       h('div',{className:'modal-ft'},
         h('button',{className:'btn btn-ghost',onClick:()=>setRenaming(null)},'Cancel'),
-        h('button',{className:'btn btn-primary',onClick:doRename,disabled:busy||!renaming.to?.trim()},busy?h(Spinner):h('i',{className:'ti ti-check'}),' Rename')
+        h('button',{className:'btn btn-primary',onClick:()=>{
+          // Save target to extras
+          if(renaming.target){
+            const updated=[...extraCamps.filter(c=>c.name!==renaming.from&&c.name!==renaming.to?.trim()),
+              {name:renaming.to?.trim()||renaming.from,target:parseInt(renaming.target)||0}];
+            saveExtras(updated);
+          }
+          doRename();
+        },disabled:busy||!renaming.to?.trim()},
+          busy?h(Spinner):h('i',{className:'ti ti-check'}),' Save Changes')
       )
     )
   );
@@ -2209,7 +2297,7 @@ const CampaignsPage = ({leads,loading,onSelect,isDemo,apiBase,onRefresh}) => {
                 onClick:e=>{e.stopPropagation();
                   if(isNone) openAssign();
                   else if(isEmpty) setEditingMeta({origName:g.name,name:g.name,target:g.target||''});
-                  else setRenaming({from:g.name,to:g.name});
+                  else { setAssignMode('all'); setAssignDate(''); openAssign(); setRenaming({from:g.name,to:g.name,target:g.target||'',actualTotal:g.total}); }
                 },title:isNone?'Assign leads':'Edit campaign'},
                 h('i',{className:`ti ${isNone?'ti-tag':'ti-pencil'}`}))
             )
