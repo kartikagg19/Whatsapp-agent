@@ -1964,6 +1964,36 @@ const CampaignsPage = ({leads,loading,onSelect,isDemo,apiBase,onRefresh}) => {
   const [assignDate,setAssignDate]=useState('');
   const [dateCounts,setDateCounts]=useState([]);
   const [busy,setBusy]=useState(false);
+  const [addingCamp,setAddingCamp]=useState(false);
+  const [newCampName,setNewCampName]=useState('');
+  const [newCampTarget,setNewCampTarget]=useState('');
+  const [editingMeta,setEditingMeta]=useState(null); // {name,target}
+
+  // Persist manually-added empty campaigns + target counts in localStorage
+  const [extraCamps,setExtraCamps]=useState(()=>{
+    try{ return JSON.parse(localStorage.getItem('extra_campaigns')||'[]'); }catch{ return []; }
+  });
+  function saveExtras(list){
+    setExtraCamps(list);
+    localStorage.setItem('extra_campaigns',JSON.stringify(list));
+  }
+  function addExtraCamp(){
+    if(!newCampName.trim()) return;
+    const updated=[...extraCamps.filter(c=>c.name!==newCampName.trim()),
+      {name:newCampName.trim(), target:parseInt(newCampTarget)||0}];
+    saveExtras(updated);
+    setAddingCamp(false); setNewCampName(''); setNewCampTarget('');
+  }
+  function saveMetaEdit(){
+    if(!editingMeta?.name) return;
+    const updated=extraCamps.map(c=>c.name===editingMeta.origName
+      ?{name:editingMeta.name,target:parseInt(editingMeta.target)||0}:c);
+    saveExtras(updated);
+    setEditingMeta(null);
+  }
+  function removeExtraCamp(name){
+    saveExtras(extraCamps.filter(c=>c.name!==name));
+  }
 
   const groups = {};
   for(const l of leads){
@@ -1974,6 +2004,11 @@ const CampaignsPage = ({leads,loading,onSelect,isDemo,apiBase,onRefresh}) => {
     if(l.label==='HOT')  groups[key].hot++;
     else if(l.label==='WARM') groups[key].warm++;
     else groups[key].cold++;
+  }
+  // Merge manually-added empty campaigns into groups
+  for(const ec of extraCamps){
+    if(!groups[ec.name]) groups[ec.name]={name:ec.name,leads:[],hot:0,warm:0,cold:0,total:0,target:ec.target,isEmpty:true};
+    else groups[ec.name].target=ec.target;
   }
   const sortedGroups = Object.values(groups).sort((a,b)=>{
     if(a.name==='(No Campaign)') return 1;
@@ -2096,13 +2131,67 @@ const CampaignsPage = ({leads,loading,onSelect,isDemo,apiBase,onRefresh}) => {
     )))
   );
 
-  if(!selected) return h('div',null,renameModal,assignModal,
+  const addCampModal = addingCamp&&h('div',{className:'overlay',onClick:e=>e.target===e.currentTarget&&setAddingCamp(false)},
+    h('div',{className:'modal',style:{maxWidth:'420px'}},
+      h('div',{className:'modal-hd'},
+        h('div',null,h('div',{className:'modal-hd-title'},'Add Campaign'),h('div',{className:'modal-hd-sub'},'Create a new campaign card')),
+        h('button',{className:'x-btn',onClick:()=>setAddingCamp(false)},h('i',{className:'ti ti-x'}))
+      ),
+      h('div',{className:'modal-bd'},
+        h('div',{className:'form-field'},
+          h('label',{className:'form-label'},'Campaign Name'),
+          h('input',{value:newCampName,autoFocus:true,onChange:e=>setNewCampName(e.target.value),onKeyDown:e=>e.key==='Enter'&&addExtraCamp(),placeholder:'e.g. Day 3'})
+        ),
+        h('div',{className:'form-field'},
+          h('label',{className:'form-label'},'Target Leads'),
+          h('input',{type:'number',value:newCampTarget,onChange:e=>setNewCampTarget(e.target.value),placeholder:'e.g. 400'})
+        )
+      ),
+      h('div',{className:'modal-ft'},
+        h('button',{className:'btn btn-ghost',onClick:()=>setAddingCamp(false)},'Cancel'),
+        h('button',{className:'btn btn-primary',onClick:addExtraCamp,disabled:!newCampName.trim()},h('i',{className:'ti ti-plus'}),' Add Campaign')
+      )
+    )
+  );
+
+  const editMetaModal = editingMeta&&h('div',{className:'overlay',onClick:e=>e.target===e.currentTarget&&setEditingMeta(null)},
+    h('div',{className:'modal',style:{maxWidth:'420px'}},
+      h('div',{className:'modal-hd'},
+        h('div',null,h('div',{className:'modal-hd-title'},'Edit Campaign'),h('div',{className:'modal-hd-sub'},'Update campaign name and target leads')),
+        h('button',{className:'x-btn',onClick:()=>setEditingMeta(null)},h('i',{className:'ti ti-x'}))
+      ),
+      h('div',{className:'modal-bd'},
+        h('div',{className:'form-field'},
+          h('label',{className:'form-label'},'Campaign Name'),
+          h('input',{value:editingMeta.name,autoFocus:true,onChange:e=>setEditingMeta(m=>({...m,name:e.target.value})),placeholder:'e.g. Day 3'})
+        ),
+        h('div',{className:'form-field'},
+          h('label',{className:'form-label'},'Target Leads'),
+          h('input',{type:'number',value:editingMeta.target,onChange:e=>setEditingMeta(m=>({...m,target:e.target.value})),placeholder:'e.g. 400'})
+        )
+      ),
+      h('div',{className:'modal-ft'},
+        h('button',{className:'btn btn-ghost',style:{color:'var(--hot)'},onClick:()=>{removeExtraCamp(editingMeta.origName);setEditingMeta(null);}},h('i',{className:'ti ti-trash'}),' Remove'),
+        h('button',{className:'btn btn-ghost',onClick:()=>setEditingMeta(null)},'Cancel'),
+        h('button',{className:'btn btn-primary',onClick:saveMetaEdit,disabled:!editingMeta.name?.trim()},h('i',{className:'ti ti-check'}),' Save')
+      )
+    )
+  );
+
+  if(!selected) return h('div',null,renameModal,assignModal,addCampModal,editMetaModal,
+    h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px'}},
+      h('div',{style:{fontSize:'13px',color:'var(--text3)'}},`${sortedGroups.filter(g=>g.name!=='(No Campaign)').length} campaigns`),
+      h('button',{className:'btn btn-primary btn-sm',onClick:()=>setAddingCamp(true)},
+        h('i',{className:'ti ti-plus'}),' Add Campaign')
+    ),
     h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:'12px'}},
       sortedGroups.map(g=>{
         const isNone=g.name==='(No Campaign)';
+        const isEmpty=!!g.isEmpty;
+        const pct=g.target>0?Math.min(Math.round(g.total/g.target*100),100):null;
         return h('div',{key:g.name,
-          style:{background:'var(--surface)',border:`1px solid ${isNone?'var(--border2)':'var(--border)'}`,borderRadius:'var(--r2)',padding:'18px 20px',cursor:'pointer',boxShadow:'var(--sh)',transition:'all 0.12s',position:'relative'},
-          onClick:()=>setSelectedCamp(g.name),
+          style:{background:'var(--surface)',border:`1px solid ${isNone?'var(--border2)':isEmpty?'var(--border2)':'var(--border)'}`,borderRadius:'var(--r2)',padding:'18px 20px',cursor:'pointer',boxShadow:'var(--sh)',transition:'all 0.12s',position:'relative',opacity:isEmpty?0.7:1},
+          onClick:()=>!isEmpty&&setSelectedCamp(g.name),
           onMouseEnter:e=>{e.currentTarget.style.boxShadow='var(--sh2)';e.currentTarget.style.transform='translateY(-2px)'},
           onMouseLeave:e=>{e.currentTarget.style.boxShadow='var(--sh)';e.currentTarget.style.transform='none'}},
           h('div',{style:{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:'14px'}},
@@ -2112,19 +2201,35 @@ const CampaignsPage = ({leads,loading,onSelect,isDemo,apiBase,onRefresh}) => {
               h('span',{style:{fontWeight:'600',fontSize:'14px',color:isNone?'var(--text3)':'var(--text1)',letterSpacing:'-0.2px'}},g.name)
             ),
             h('div',{style:{display:'flex',alignItems:'center',gap:'6px'}},
-              h('span',{style:{fontFamily:'var(--mono)',fontSize:'20px',fontWeight:'700',color:'var(--text1)'}},g.total),
+              h('div',{style:{textAlign:'right'}},
+                h('span',{style:{fontFamily:'var(--mono)',fontSize:'20px',fontWeight:'700',color:'var(--text1)'}},g.total),
+                g.target>0&&h('span',{style:{fontFamily:'var(--mono)',fontSize:'11px',color:'var(--text3)',display:'block'}},`/ ${g.target} target`)
+              ),
               !isDemo&&apiBase&&apiBase!=='DEMO'&&h('button',{className:'btn btn-ghost btn-sm',style:{padding:'3px 7px',fontSize:'11px'},
-                onClick:e=>{e.stopPropagation();isNone?openAssign():setRenaming({from:g.name,to:g.name});},title:isNone?'Assign campaign name':'Rename campaign'},
+                onClick:e=>{e.stopPropagation();
+                  if(isNone) openAssign();
+                  else if(isEmpty) setEditingMeta({origName:g.name,name:g.name,target:g.target||''});
+                  else setRenaming({from:g.name,to:g.name});
+                },title:isNone?'Assign leads':'Edit campaign'},
                 h('i',{className:`ti ${isNone?'ti-tag':'ti-pencil'}`}))
             )
           ),
-          h('div',{style:{display:'flex',gap:'6px',marginBottom:'12px'}},
-            [['HOT',g.hot,'var(--hot)','var(--hot-bg)','var(--hot-br)'],['WARM',g.warm,'var(--warm)','var(--warm-bg)','var(--warm-br)'],['COLD',g.cold,'var(--cold)','var(--cold-bg)','var(--cold-br)']
-            ].map(([l,v,c,bg,br])=>v>0&&h('span',{key:l,style:{fontSize:'11px',fontWeight:'600',padding:'2px 8px',borderRadius:'4px',background:`${bg}`,color:`${c}`,border:`1px solid ${br}`,fontFamily:'var(--mono)'}},`${l} ${v}`))
+          isEmpty
+            ? h('div',{style:{fontSize:'12px',color:'var(--text3)',fontStyle:'italic',marginBottom:'12px'}},'No leads assigned yet')
+            : h('div',{style:{display:'flex',gap:'6px',marginBottom:'12px'}},
+                [['HOT',g.hot,'var(--hot)','var(--hot-bg)','var(--hot-br)'],['WARM',g.warm,'var(--warm)','var(--warm-bg)','var(--warm-br)'],['COLD',g.cold,'var(--cold)','var(--cold-bg)','var(--cold-br)']
+                ].map(([l,v,c,bg,br])=>v>0&&h('span',{key:l,style:{fontSize:'11px',fontWeight:'600',padding:'2px 8px',borderRadius:'4px',background:`${bg}`,color:`${c}`,border:`1px solid ${br}`,fontFamily:'var(--mono)'}},`${l} ${v}`))
+              ),
+          pct!==null&&h('div',{style:{marginBottom:'6px'}},
+            h('div',{style:{display:'flex',justifyContent:'space-between',fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)',marginBottom:'3px'}},
+              h('span',null,'Progress'),h('span',null,`${pct}%`)
+            ),
+            h('div',{style:{height:'4px',background:'var(--surface3)',borderRadius:'2px',overflow:'hidden'}},
+              h('div',{style:{height:'4px',width:`${pct}%`,borderRadius:'2px',background:pct>=100?'var(--green)':'var(--brand)',transition:'width 0.4s'}}))
           ),
-          h('div',{style:{height:'4px',background:'var(--surface3)',borderRadius:'2px',overflow:'hidden'}},
-            h('div',{style:{height:'4px',borderRadius:'2px',width:'100%',background:`linear-gradient(to right,var(--hot) ${g.hot/g.total*100}%,var(--warm) ${g.hot/g.total*100}% ${(g.hot+g.warm)/g.total*100}%,var(--cold) ${(g.hot+g.warm)/g.total*100}%)`}})),
-          h('div',{style:{marginTop:'8px',fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)'}},`${Math.round(g.hot/g.total*100)}% hot · ${Math.round(g.warm/g.total*100)}% warm`)
+          !isEmpty&&h('div',{style:{height:'4px',background:'var(--surface3)',borderRadius:'2px',overflow:'hidden',marginBottom:'6px'}},
+            h('div',{style:{height:'4px',borderRadius:'2px',width:'100%',background:`linear-gradient(to right,var(--hot) ${g.hot/Math.max(g.total,1)*100}%,var(--warm) ${g.hot/Math.max(g.total,1)*100}% ${(g.hot+g.warm)/Math.max(g.total,1)*100}%,var(--cold) ${(g.hot+g.warm)/Math.max(g.total,1)*100}%)`}})),
+          !isEmpty&&h('div',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)'}},`${Math.round(g.hot/Math.max(g.total,1)*100)}% hot · ${Math.round(g.warm/Math.max(g.total,1)*100)}% warm`)
         );
       })
     )
