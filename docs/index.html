@@ -667,7 +667,7 @@ const LeadsPage = ({leads,loading,onSelect,apiBase,isDemo}) => {
   const fmtDate = ts => ts ? new Date(ts).toLocaleString('en-IN',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:true}) : '';
 
   function downloadCSV(csvContent, filename){
-    const bom = '﻿'; // UTF-8 BOM for Excel
+    const bom = '﻿';
     const blob = new Blob([bom+csvContent],{type:'text/csv;charset=utf-8;'});
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -675,25 +675,42 @@ const LeadsPage = ({leads,loading,onSelect,apiBase,isDemo}) => {
     URL.revokeObjectURL(url);
   }
 
-  // Quick export — leads only, no API call needed
   function exportLeadsOnly(){
-    const headers = ['Name','Phone','Score','Status','Intent','Messages','Budget','Location','Timeline','Purpose','Site Visit','First Seen','Last Active'];
-    const rows = leads.map(l=>[
-      l.name||'Unknown', l.phone||'', l.score||0, l.label||'COLD',
+    const headers = ['Name','Phone','Score','Status','Campaign','Intent','Messages','Budget','Location','Timeline','Purpose','Site Visit','First Seen','Last Active'];
+    const rows = visible.map(l=>[
+      l.name||'Unknown', l.phone||'', l.score||0, l.label||'COLD', l.campaign||'',
       (l.intent||'general').replace('_',' '), l.message_count||0,
       l.budget_range||'', l.location_preference||'', l.timeline||'', l.purpose||'',
       l.site_visit_offered?'Yes':'No', fmtDate(l.created_at), fmtDate(l.last_message)
     ].map(toCSV).join(','));
     const date = new Date().toISOString().slice(0,10);
-    downloadCSV([headers.join(','),...rows].join('\r\n'), `leads-${date}.csv`);
+    const suffix = campaign!=='ALL'?`-${campaign.replace(/\s+/g,'-')}`:'';
+    downloadCSV([headers.join(','),...rows].join('\r\n'), `leads${suffix}-${date}.csv`);
   }
 
-  // Full export — opens server-generated CSV directly (bypasses browser cache)
   async function exportWithChats(){
-    if(isDemo||!apiBase||apiBase==='DEMO'){
-      alert('Connect your backend to export chat history.');return;
-    }
-    window.open(apiBase + '/export/csv', '_blank');
+    if(isDemo||!apiBase||apiBase==='DEMO'){alert('Connect your backend to export chat history.');return;}
+    setExporting(true);
+    try{
+      const r=await apiFetch(`${apiBase}/export/full`);
+      const d=await r.json();
+      if(!d.success) throw new Error(d.error||'Export failed');
+      const headers=['Name','Phone','Score','Status','Campaign','Intent','Total Messages','Budget','Location','Timeline','Purpose','Site Visit','First Seen','Last Active','Sender','Message','Message Time'];
+      const rows=d.data
+        .filter(row=>campaign==='ALL'||(row.lead.campaign||'')=== campaign)
+        .map(row=>{
+          const l=row.lead;
+          return [l.name||'Unknown',l.phone||'',l.score||0,l.label||'COLD',l.campaign||'',
+            (l.intent||'general').replace('_',' '),l.message_count||0,
+            l.budget_range||'',l.location_preference||'',l.timeline||'',l.purpose||'',
+            l.site_visit_offered?'Yes':'No',fmtDate(l.created_at),fmtDate(l.last_message),
+            row.role||'',row.message||'',fmtDate(row.msg_time)
+          ].map(toCSV).join(',');
+        });
+      const date=new Date().toISOString().slice(0,10);
+      const suffix=campaign!=='ALL'?`-${campaign.replace(/\s+/g,'-')}`:'';
+      downloadCSV([headers.join(','),...rows].join('\r\n'),`leads-with-chats${suffix}-${date}.csv`);
+    }catch(e){alert('Export failed: '+e.message);}
     setExporting(false);
   }
 
@@ -719,9 +736,9 @@ const LeadsPage = ({leads,loading,onSelect,apiBase,isDemo}) => {
           h('i',{className:'ti ti-search'}),
           h('input',{value:search,onChange:e=>setSearch(e.target.value),placeholder:'Search name or phone...'})
         ),
-        h('button',{className:'btn btn-ghost btn-sm',onClick:exportLeadsOnly,disabled:leads.length===0,title:'Download leads summary (no chat history)'},
+        h('button',{className:'btn btn-ghost btn-sm',onClick:exportLeadsOnly,disabled:leads.length===0,title:'Download leads summary'},
           h('i',{className:'ti ti-table-export'}),' Export Leads'),
-        h('button',{className:'btn btn-primary btn-sm',onClick:exportWithChats,disabled:exporting||leads.length===0,title:'Download leads + full conversation history'},
+        h('button',{className:'btn btn-primary btn-sm',onClick:exportWithChats,disabled:exporting||leads.length===0,title:'Download leads + full chat history'},
           exporting?h(Spinner):h('i',{className:'ti ti-message-report'}),' ',exporting?'Exporting...':'Export with Chats')
       )
     ),
@@ -770,28 +787,32 @@ function apiFetch(url, opts={}){
 }
 
 /* ─── LOGIN PAGE ──────────────────────────────────────────────── */
+const BACKEND_URL='https://whatsapp-agent-production-3525.up.railway.app/api';
+const ACCESS_PASSWORD='8880';
+
 const LoginPage = ({onLogin}) => {
-  const savedApi=localStorage.getItem('pa_api')||'';
-  const [url,setUrl]=useState(savedApi);
+  const [pwd,setPwd]=useState('');
   const [err,setErr]=useState('');
   const [busy,setBusy]=useState(false);
+  const [show,setShow]=useState(false);
 
   async function connect(){
     setErr('');
-    const base=(url||'').trim().replace(/\/+$/,'').replace(/\/api$/i,'');
-    if(!base){setErr('Enter your backend URL');return;}
+    if(!pwd.trim()){setErr('Enter your password');return;}
+    if(pwd.trim()!==ACCESS_PASSWORD){setErr('Incorrect password');return;}
     setBusy(true);
     try{
-      const r=await fetch(`${base}/api/access`);
+      const r=await fetch(`${BACKEND_URL}/access`);
       if(r.ok){
         const d=await r.json();
-        localStorage.setItem('pa_api',base+'/api');
+        localStorage.setItem('pa_api',BACKEND_URL);
         localStorage.setItem('pa_token',d.token||'');
-        onLogin(base+'/api',d.token||'');
+        localStorage.setItem('pa_auth','1');
+        onLogin(BACKEND_URL,d.token||'');
       } else {
-        setErr(`Cannot connect — server returned ${r.status}`);
+        setErr('Cannot reach server. Try again.');
       }
-    }catch{setErr('Cannot reach server. Check the URL.');}
+    }catch{setErr('Cannot reach server. Check your internet.');}
     setBusy(false);
   }
 
@@ -804,28 +825,29 @@ const LoginPage = ({onLogin}) => {
           h('div',{className:'login-logo-sub'},'Lead Dashboard')
         )
       ),
-      h('div',{className:'login-title'},'Connect your dashboard'),
-      h('div',{className:'login-sub'},'Paste your Railway backend URL to get started'),
+      h('div',{className:'login-title'},'Welcome back'),
+      h('div',{className:'login-sub'},'Enter your password to access the dashboard'),
       err&&h('div',{className:'login-err'},err),
-      h(Field,{label:'Backend URL'},
-        h('input',{
-          type:'url', value:url, autoFocus:true,
-          onChange:e=>{setUrl(e.target.value);setErr('');},
-          placeholder:'https://your-app.up.railway.app',
-          onKeyDown:e=>e.key==='Enter'&&connect()
-        })
-      ),
-      h('div',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)',marginBottom:'16px',marginTop:'-8px'}},
-        'Example: https://whatsapp-agent-production-3525.up.railway.app'
+      h(Field,{label:'Password'},
+        h('div',{style:{position:'relative'}},
+          h('input',{
+            type:show?'text':'password',
+            value:pwd,
+            autoFocus:true,
+            onChange:e=>{setPwd(e.target.value);setErr('');},
+            placeholder:'Enter password',
+            onKeyDown:e=>e.key==='Enter'&&connect(),
+            style:{width:'100%',paddingRight:'40px'}
+          }),
+          h('button',{
+            type:'button',
+            onClick:()=>setShow(!show),
+            style:{position:'absolute',right:'10px',top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--text3)',padding:'0'}
+          },h('i',{className:`ti ${show?'ti-eye-off':'ti-eye'}`}))
+        )
       ),
       h('button',{className:'btn btn-primary',style:{width:'100%',justifyContent:'center',padding:'10px',fontSize:'14px'},onClick:connect,disabled:busy},
-        busy?h(Spinner):h('i',{className:'ti ti-plug'}),' ',busy?'Connecting...':'Open Dashboard'),
-      h('div',{style:{textAlign:'center',marginTop:'12px'}},
-        h('button',{className:'btn btn-ghost btn-sm',onClick:()=>{
-          localStorage.removeItem('pa_api');localStorage.removeItem('pa_token');
-          onLogin('DEMO','');
-        }},'Try Demo')
-      )
+        busy?h(Spinner):h('i',{className:'ti ti-lock-open'}),' ',busy?'Opening...':'Open Dashboard')
     )
   );
 };
@@ -1576,6 +1598,7 @@ const CampaignIntelPage = ({apiBase,isDemo,showToast}) => {
       h('i',{className:'ti '+t.icon}),t.l))
   );
 
+  // ── Overview panel ──
   const overviewPanel = h('div',null,
     !overview || overview.total_exchanges === 0
       ? h('div',{className:'empty'},
@@ -1599,6 +1622,7 @@ const CampaignIntelPage = ({apiBase,isDemo,showToast}) => {
         )
   );
 
+  // ── Funnel panel ──
   const funnelPanel = funnel.length === 0
     ? h('div',{className:'empty'},h('p',null,'Funnel data builds up after LLM evaluation completes (every 5 min)'))
     : h('div',{className:'card'},
@@ -1619,6 +1643,7 @@ const CampaignIntelPage = ({apiBase,isDemo,showToast}) => {
         )
       );
 
+  // ── Issues panel ──
   const issuesPanel = issues.length === 0
     ? h('div',{className:'empty'},h('p',null,'No issues flagged yet — either no traffic or things are looking clean'))
     : h('div',{className:'card'},
@@ -1639,6 +1664,7 @@ const CampaignIntelPage = ({apiBase,isDemo,showToast}) => {
         )
       );
 
+  // ── Hallucinations panel ──
   const halluPanel = hallu.length === 0
     ? h('div',{className:'empty'},
         h('i',{className:'ti ti-check',style:{fontSize:'32px',color:'var(--green)'}}),
@@ -1665,6 +1691,7 @@ const CampaignIntelPage = ({apiBase,isDemo,showToast}) => {
         ))
       );
 
+  // ── Objections panel ──
   const objPanel = obj.breakdown.length === 0
     ? h('div',{className:'empty'},h('p',null,'No objection data yet — appears after LLM evaluations'))
     : h('div',null,
@@ -1702,6 +1729,7 @@ const CampaignIntelPage = ({apiBase,isDemo,showToast}) => {
         )
       );
 
+  // ── Review queue panel ──
   // ── Recurring Patterns panel ──
   const patternsTable = (rows, kind) => rows.length === 0
     ? h('div',{className:'empty',style:{padding:'24px'}},h('p',null, `No ${kind} patterns yet — need more conversations`))
@@ -1841,7 +1869,7 @@ const CampaignsPage = ({leads,loading,onSelect,isDemo,apiBase,onRefresh}) => {
   const [renaming,setRenaming]=useState(null);
   const [assigning,setAssigning]=useState(false);
   const [assignName,setAssignName]=useState('');
-  const [assignMode,setAssignMode]=useState('all');   // 'all' | 'date'
+  const [assignMode,setAssignMode]=useState('all');
   const [assignDate,setAssignDate]=useState('');
   const [dateCounts,setDateCounts]=useState([]);
   const [busy,setBusy]=useState(false);
@@ -1872,18 +1900,13 @@ const CampaignsPage = ({leads,loading,onSelect,isDemo,apiBase,onRefresh}) => {
     try{
       const r=await apiFetch(`${apiBase}/campaigns/rename`,{method:'POST',body:JSON.stringify({from:renaming.from,to:renaming.to.trim()})});
       const d=await r.json();
-      if(d.success){
-        if(selected===renaming.from) setSelectedCamp(renaming.to.trim());
-        setRenaming(null);
-        onRefresh && onRefresh();
-      }
+      if(d.success){if(selected===renaming.from)setSelectedCamp(renaming.to.trim());setRenaming(null);onRefresh&&onRefresh();}
     }catch(e){alert('Rename failed: '+e.message);}
     setBusy(false);
   }
 
   async function openAssign(){
     setAssigning(true);
-    // Load date preview
     if(apiBase&&apiBase!=='DEMO'){
       try{
         const r=await apiFetch(`${apiBase}/campaigns/date-preview`);
@@ -1897,88 +1920,57 @@ const CampaignsPage = ({leads,loading,onSelect,isDemo,apiBase,onRefresh}) => {
     if(!assignName.trim()||busy) return;
     setBusy(true);
     try{
-      const body = assignMode==='date'&&assignDate
-        ? {campaign:assignName.trim(), from_date:assignDate, to_date:assignDate}
-        : {campaign:assignName.trim(), all_unassigned:true};
+      const body=assignMode==='date'&&assignDate
+        ?{campaign:assignName.trim(),from_date:assignDate,to_date:assignDate}
+        :{campaign:assignName.trim(),all_unassigned:true};
       const r=await apiFetch(`${apiBase}/campaigns/assign`,{method:'POST',body:JSON.stringify(body)});
       const d=await r.json();
-      if(d.success){
-        setAssigning(false); setAssignName(''); setAssignDate(''); setAssignMode('all');
-        onRefresh && onRefresh();
-      }
+      if(d.success){setAssigning(false);setAssignName('');setAssignDate('');setAssignMode('all');onRefresh&&onRefresh();}
     }catch(e){alert('Assign failed: '+e.message);}
     setBusy(false);
   }
 
   if(loading) return h('div',{className:'empty'},h(Spinner));
 
-  // ── RENAME MODAL ──────────────────────────────────────────────
-  const renameModal = renaming && h('div',{className:'overlay',onClick:e=>e.target===e.currentTarget&&setRenaming(null)},
+  const renameModal = renaming&&h('div',{className:'overlay',onClick:e=>e.target===e.currentTarget&&setRenaming(null)},
     h('div',{className:'modal',style:{maxWidth:'420px'}},
       h('div',{className:'modal-hd'},
-        h('div',null,
-          h('div',{className:'modal-hd-title'},'Rename Campaign'),
-          h('div',{className:'modal-hd-sub'},`All leads in "${renaming.from}" will be updated`)
-        ),
+        h('div',null,h('div',{className:'modal-hd-title'},'Rename Campaign'),h('div',{className:'modal-hd-sub'},`All leads in "${renaming.from}" will be updated`)),
         h('button',{className:'x-btn',onClick:()=>setRenaming(null)},h('i',{className:'ti ti-x'}))
       ),
       h('div',{className:'modal-bd'},
-        h('div',{className:'form-field'},
-          h('label',{className:'form-label'},'New Campaign Name'),
-          h('input',{
-            value:renaming.to, autoFocus:true,
-            onChange:e=>setRenaming(r=>({...r,to:e.target.value})),
-            onKeyDown:e=>e.key==='Enter'&&doRename(),
-            placeholder:'e.g. Day 1 — May 2025'
-          })
-        )
+        h('div',{className:'form-field'},h('label',{className:'form-label'},'New Campaign Name'),
+          h('input',{value:renaming.to,autoFocus:true,onChange:e=>setRenaming(r=>({...r,to:e.target.value})),onKeyDown:e=>e.key==='Enter'&&doRename(),placeholder:'e.g. Day 1 — May 2025'}))
       ),
       h('div',{className:'modal-ft'},
         h('button',{className:'btn btn-ghost',onClick:()=>setRenaming(null)},'Cancel'),
-        h('button',{className:'btn btn-primary',onClick:doRename,disabled:busy||!renaming.to?.trim()},
-          busy?h(Spinner):h('i',{className:'ti ti-check'}),' Rename')
+        h('button',{className:'btn btn-primary',onClick:doRename,disabled:busy||!renaming.to?.trim()},busy?h(Spinner):h('i',{className:'ti ti-check'}),' Rename')
       )
     )
   );
 
-  // ── ASSIGN MODAL ──────────────────────────────────────────────
-  const untaggedTotal = groups['(No Campaign)']?.total || 0;
-  const previewCount = assignMode==='date'&&assignDate
-    ? (dateCounts.find(d=>d.date===assignDate)?.count||0)
-    : untaggedTotal;
+  const untaggedTotal=groups['(No Campaign)']?.total||0;
+  const previewCount=assignMode==='date'&&assignDate?(dateCounts.find(d=>d.date===assignDate)?.count||0):untaggedTotal;
 
-  const assignModal = assigning && h('div',{className:'overlay',onClick:e=>e.target===e.currentTarget&&setAssigning(false)},
+  const assignModal = assigning&&h('div',{className:'overlay',onClick:e=>e.target===e.currentTarget&&setAssigning(false)},
     h('div',{className:'modal',style:{maxWidth:'500px'}},
       h('div',{className:'modal-hd'},
-        h('div',null,
-          h('div',{className:'modal-hd-title'},'Assign Campaign Name'),
-          h('div',{className:'modal-hd-sub'},`${untaggedTotal} untagged leads — split them by date`)
-        ),
+        h('div',null,h('div',{className:'modal-hd-title'},'Assign Campaign Name'),h('div',{className:'modal-hd-sub'},`${untaggedTotal} untagged leads — split them by date`)),
         h('button',{className:'x-btn',onClick:()=>setAssigning(false)},h('i',{className:'ti ti-x'}))
       ),
       h('div',{className:'modal-bd'},
-        // Mode toggle
         h('div',{style:{display:'flex',gap:'8px',marginBottom:'16px'}},
-          ['all','date'].map(m=>h('button',{key:m,
-            className:`btn btn-sm ${assignMode===m?'btn-primary':'btn-ghost'}`,
-            onClick:()=>setAssignMode(m)
-          }, m==='all'?'Assign All Untagged':'Assign by Specific Date'))
+          ['all','date'].map(m=>h('button',{key:m,className:`btn btn-sm ${assignMode===m?'btn-primary':'btn-ghost'}`,onClick:()=>setAssignMode(m)},
+            m==='all'?'Assign All Untagged':'Assign by Specific Date'))
         ),
-
         assignMode==='date'&&h('div',null,
-          // Date breakdown table
           dateCounts.length>0&&h('div',{style:{marginBottom:'14px'}},
             h('div',{className:'form-label',style:{marginBottom:'6px'}},'Leads per day (untagged)'),
             h('div',{style:{background:'var(--surface2)',borderRadius:'var(--r)',border:'1px solid var(--border)',overflow:'hidden'}},
-              dateCounts.map((d,i)=>h('div',{key:d.date,
-                onClick:()=>setAssignDate(d.date),
-                style:{
-                  display:'flex',alignItems:'center',justifyContent:'space-between',
-                  padding:'8px 13px',cursor:'pointer',fontSize:'13px',
+              dateCounts.map((d,i)=>h('div',{key:d.date,onClick:()=>setAssignDate(d.date),
+                style:{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 13px',cursor:'pointer',fontSize:'13px',
                   background:assignDate===d.date?'var(--accent-sub)':'transparent',
-                  borderBottom:i<dateCounts.length-1?'1px solid var(--border)':'none'
-                }
-              },
+                  borderBottom:i<dateCounts.length-1?'1px solid var(--border)':'none'}},
                 h('span',{style:{fontFamily:'var(--mono)',color:assignDate===d.date?'var(--text1)':'var(--text2)'}},d.date),
                 h('span',{style:{fontFamily:'var(--mono)',fontWeight:'600',color:assignDate===d.date?'var(--text1)':'var(--text3)'}},`${d.count} leads`)
               ))
@@ -1989,135 +1981,85 @@ const CampaignsPage = ({leads,loading,onSelect,isDemo,apiBase,onRefresh}) => {
             h('input',{type:'date',value:assignDate,onChange:e=>setAssignDate(e.target.value)})
           )
         ),
-
         h('div',{className:'form-field',style:{marginTop:'14px',marginBottom:0}},
           h('label',{className:'form-label'},
-            assignMode==='date'&&assignDate
-              ? `Campaign name for ${assignDate} (${previewCount} leads)`
-              : `Campaign name for all ${untaggedTotal} untagged leads`
+            assignMode==='date'&&assignDate?`Campaign name for ${assignDate} (${previewCount} leads)`:`Campaign name for all ${untaggedTotal} untagged leads`
           ),
-          h('input',{
-            value:assignName, autoFocus:assignMode==='all',
-            onChange:e=>setAssignName(e.target.value),
-            onKeyDown:e=>e.key==='Enter'&&doAssign(),
-            placeholder:'e.g. Day 1'
-          })
+          h('input',{value:assignName,autoFocus:assignMode==='all',onChange:e=>setAssignName(e.target.value),onKeyDown:e=>e.key==='Enter'&&doAssign(),placeholder:'e.g. Day 1'})
         )
       ),
       h('div',{className:'modal-ft'},
         h('button',{className:'btn btn-ghost',onClick:()=>setAssigning(false)},'Cancel'),
-        h('button',{
-          className:'btn btn-primary',onClick:doAssign,
-          disabled:busy||!assignName.trim()||(assignMode==='date'&&!assignDate)
-        },
-          busy?h(Spinner):h('i',{className:'ti ti-tag'}),
-          ` Assign ${previewCount} leads`)
+        h('button',{className:'btn btn-primary',onClick:doAssign,disabled:busy||!assignName.trim()||(assignMode==='date'&&!assignDate)},
+          busy?h(Spinner):h('i',{className:'ti ti-tag'}),` Assign ${previewCount} leads`)
       )
     )
   );
 
-  if(sortedGroups.length===0||(!isDemo&&leads.length===0)) return h('div',null,
-    renameModal, assignModal,
-    h('div',{className:'card'},
-      h('div',{className:'card-bd'},
-        h('div',{className:'empty'},
-          h('i',{className:'ti ti-flag',style:{fontSize:'28px',color:'var(--border2)'}}),
-          h('p',null,'No campaigns yet. Add a "campaign" field to your CRM POST body to start tracking.'),
-          h('div',{style:{fontFamily:'var(--mono)',fontSize:'11px',color:'var(--text3)',marginTop:'8px',background:'var(--surface2)',padding:'8px 12px',borderRadius:'var(--r)',display:'inline-block'}},
-            '{ "phone": "91...", "message": "...", "campaign": "Day 1" }')
-        )
-      )
-    )
+  if(sortedGroups.length===0||(!isDemo&&leads.length===0)) return h('div',null,renameModal,assignModal,
+    h('div',{className:'card'},h('div',{className:'card-bd'},h('div',{className:'empty'},
+      h('i',{className:'ti ti-flag',style:{fontSize:'28px',color:'var(--border2)'}}),
+      h('p',null,'No campaigns yet. Add a "campaign" field to your CRM POST body.'),
+      h('div',{style:{fontFamily:'var(--mono)',fontSize:'11px',color:'var(--text3)',marginTop:'8px',background:'var(--surface2)',padding:'8px 12px',borderRadius:'var(--r)',display:'inline-block'}},
+        '{ "phone": "91...", "message": "...", "campaign": "Day 1" }')
+    )))
   );
 
-  // ── CARD LIST ─────────────────────────────────────────────────
-  if(!selected) return h('div',null,
-    renameModal, assignModal,
+  if(!selected) return h('div',null,renameModal,assignModal,
     h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:'12px'}},
       sortedGroups.map(g=>{
-        const isNone = g.name==='(No Campaign)';
-        return h('div',{
-          key:g.name,
-          style:{background:'var(--surface)',border:`1px solid ${isNone?'var(--border2)':'var(--border)'}`,
-            borderRadius:'var(--r2)',padding:'18px 20px',cursor:'pointer',
-            boxShadow:'var(--sh)',transition:'all 0.12s',position:'relative'},
+        const isNone=g.name==='(No Campaign)';
+        return h('div',{key:g.name,
+          style:{background:'var(--surface)',border:`1px solid ${isNone?'var(--border2)':'var(--border)'}`,borderRadius:'var(--r2)',padding:'18px 20px',cursor:'pointer',boxShadow:'var(--sh)',transition:'all 0.12s',position:'relative'},
           onClick:()=>setSelectedCamp(g.name),
           onMouseEnter:e=>{e.currentTarget.style.boxShadow='var(--sh2)';e.currentTarget.style.transform='translateY(-2px)'},
-          onMouseLeave:e=>{e.currentTarget.style.boxShadow='var(--sh)';e.currentTarget.style.transform='none'}
-        },
+          onMouseLeave:e=>{e.currentTarget.style.boxShadow='var(--sh)';e.currentTarget.style.transform='none'}},
           h('div',{style:{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:'14px'}},
             h('div',{style:{display:'flex',alignItems:'center',gap:'8px'}},
               h('div',{style:{width:'28px',height:'28px',background:isNone?'var(--surface3)':'#EFF6FF',borderRadius:'6px',display:'flex',alignItems:'center',justifyContent:'center'}},
-                h('i',{className:`ti ${isNone?'ti-tag':'ti-flag'}`,style:{fontSize:'14px',color:isNone?'var(--text3)':'#1D4ED8'}})
-              ),
+                h('i',{className:`ti ${isNone?'ti-tag':'ti-flag'}`,style:{fontSize:'14px',color:isNone?'var(--text3)':'#1D4ED8'}})),
               h('span',{style:{fontWeight:'600',fontSize:'14px',color:isNone?'var(--text3)':'var(--text1)',letterSpacing:'-0.2px'}},g.name)
             ),
             h('div',{style:{display:'flex',alignItems:'center',gap:'6px'}},
               h('span',{style:{fontFamily:'var(--mono)',fontSize:'20px',fontWeight:'700',color:'var(--text1)'}},g.total),
-              // Edit/Assign button — stop propagation so card click doesn't fire
-              !isDemo&&apiBase&&apiBase!=='DEMO'&&h('button',{
-                className:'btn btn-ghost btn-sm',
-                style:{padding:'3px 7px',fontSize:'11px'},
-                onClick:e=>{e.stopPropagation(); isNone?openAssign():setRenaming({from:g.name,to:g.name});},
-                title:isNone?'Assign campaign name':'Rename campaign'
-              },h('i',{className:`ti ${isNone?'ti-tag':'ti-pencil'}`}))
+              !isDemo&&apiBase&&apiBase!=='DEMO'&&h('button',{className:'btn btn-ghost btn-sm',style:{padding:'3px 7px',fontSize:'11px'},
+                onClick:e=>{e.stopPropagation();isNone?openAssign():setRenaming({from:g.name,to:g.name});},title:isNone?'Assign campaign name':'Rename campaign'},
+                h('i',{className:`ti ${isNone?'ti-tag':'ti-pencil'}`}))
             )
           ),
           h('div',{style:{display:'flex',gap:'6px',marginBottom:'12px'}},
-            [['HOT',g.hot,'var(--hot)','var(--hot-bg)','var(--hot-br)'],
-             ['WARM',g.warm,'var(--warm)','var(--warm-bg)','var(--warm-br)'],
-             ['COLD',g.cold,'var(--cold)','var(--cold-bg)','var(--cold-br)']
-            ].map(([l,v,c,bg,br])=>v>0&&h('span',{key:l,style:{
-              fontSize:'11px',fontWeight:'600',padding:'2px 8px',borderRadius:'4px',
-              background:`${bg}`,color:`${c}`,border:`1px solid ${br}`,fontFamily:'var(--mono)'
-            }},`${l} ${v}`))
+            [['HOT',g.hot,'var(--hot)','var(--hot-bg)','var(--hot-br)'],['WARM',g.warm,'var(--warm)','var(--warm-bg)','var(--warm-br)'],['COLD',g.cold,'var(--cold)','var(--cold-bg)','var(--cold-br)']
+            ].map(([l,v,c,bg,br])=>v>0&&h('span',{key:l,style:{fontSize:'11px',fontWeight:'600',padding:'2px 8px',borderRadius:'4px',background:`${bg}`,color:`${c}`,border:`1px solid ${br}`,fontFamily:'var(--mono)'}},`${l} ${v}`))
           ),
           h('div',{style:{height:'4px',background:'var(--surface3)',borderRadius:'2px',overflow:'hidden'}},
-            h('div',{style:{height:'4px',borderRadius:'2px',width:'100%',
-              background:`linear-gradient(to right,var(--hot) ${g.hot/g.total*100}%,var(--warm) ${g.hot/g.total*100}% ${(g.hot+g.warm)/g.total*100}%,var(--cold) ${(g.hot+g.warm)/g.total*100}%)`}})
-          ),
-          h('div',{style:{marginTop:'8px',fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)'}},
-            `${Math.round(g.hot/g.total*100)}% hot · ${Math.round(g.warm/g.total*100)}% warm`)
+            h('div',{style:{height:'4px',borderRadius:'2px',width:'100%',background:`linear-gradient(to right,var(--hot) ${g.hot/g.total*100}%,var(--warm) ${g.hot/g.total*100}% ${(g.hot+g.warm)/g.total*100}%,var(--cold) ${(g.hot+g.warm)/g.total*100}%)`}})),
+          h('div',{style:{marginTop:'8px',fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)'}},`${Math.round(g.hot/g.total*100)}% hot · ${Math.round(g.warm/g.total*100)}% warm`)
         );
       })
     )
   );
 
-  // ── DETAIL VIEW ───────────────────────────────────────────────
-  const camp = groups[selected];
-  const isNoneDetail = selected==='(No Campaign)';
-  return h('div',null,
-    renameModal, assignModal,
+  const camp=groups[selected];
+  const isNoneDetail=selected==='(No Campaign)';
+  return h('div',null,renameModal,assignModal,
     h('div',{style:{display:'flex',alignItems:'center',gap:'10px',marginBottom:'18px'}},
-      h('button',{className:'btn btn-ghost btn-sm',onClick:()=>setSelectedCamp(null)},
-        h('i',{className:'ti ti-arrow-left'}),' All Campaigns'),
+      h('button',{className:'btn btn-ghost btn-sm',onClick:()=>setSelectedCamp(null)},h('i',{className:'ti ti-arrow-left'}),' All Campaigns'),
       h('div',{style:{width:'1px',height:'20px',background:'var(--border)'}}),
       h('div',{style:{display:'flex',alignItems:'center',gap:'8px',flex:1}},
         h('i',{className:'ti ti-flag',style:{color:'#1D4ED8'}}),
         h('span',{style:{fontWeight:'600',fontSize:'15px',color:'var(--text1)'}},selected)
       ),
-      !isDemo&&apiBase&&apiBase!=='DEMO'&&h('button',{
-        className:'btn btn-ghost btn-sm',
-        onClick:()=>isNoneDetail?setAssigning(true):setRenaming({from:selected,to:selected})
-      },h('i',{className:`ti ${isNoneDetail?'ti-tag':'ti-pencil'}`}),isNoneDetail?' Assign Name':' Rename')
+      !isDemo&&apiBase&&apiBase!=='DEMO'&&h('button',{className:'btn btn-ghost btn-sm',onClick:()=>isNoneDetail?setAssigning(true):setRenaming({from:selected,to:selected})},
+        h('i',{className:`ti ${isNoneDetail?'ti-tag':'ti-pencil'}`}),isNoneDetail?' Assign Name':' Rename')
     ),
     h('div',{style:{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'10px',marginBottom:'18px'}},
-      [{label:'Total Leads',val:camp.total,color:'var(--text1)'},
-       {label:'Hot Leads',  val:camp.hot,  color:'var(--hot)'},
-       {label:'Warm Leads', val:camp.warm, color:'var(--warm)'},
-       {label:'Cold Leads', val:camp.cold, color:'var(--cold)'},
-      ].map(s=>h('div',{key:s.label,className:'stat'},
-        h('div',{className:'stat-label'},s.label),
-        h('div',{className:'stat-val',style:{color:s.color,fontSize:'24px'}},s.val),
-        h('div',{className:'stat-meta'},`${s.val>0?Math.round(s.val/camp.total*100):0}% of campaign`)
-      ))
+      [{label:'Total Leads',val:camp.total,color:'var(--text1)'},{label:'Hot Leads',val:camp.hot,color:'var(--hot)'},{label:'Warm Leads',val:camp.warm,color:'var(--warm)'},{label:'Cold Leads',val:camp.cold,color:'var(--cold)'}]
+      .map(s=>h('div',{key:s.label,className:'stat'},h('div',{className:'stat-label'},s.label),h('div',{className:'stat-val',style:{color:s.color,fontSize:'24px'}},s.val),h('div',{className:'stat-meta'},`${s.val>0?Math.round(s.val/camp.total*100):0}% of campaign`)))
     ),
     h('div',{className:'card'},
       h('div',{className:'card-hd'},
         h('span',{className:'card-title'},`${selected} — ${camp.leads.length} leads`),
-        h('div',{style:{display:'flex',gap:'6px'}},
-          ['HOT','WARM','COLD'].map(lbl=>h('span',{key:lbl,className:`badge b-${lbl.toLowerCase()}`},
-            `${lbl} ${camp.leads.filter(l=>l.label===lbl).length}`)))
+        h('div',{style:{display:'flex',gap:'6px'}},['HOT','WARM','COLD'].map(lbl=>h('span',{key:lbl,className:`badge b-${lbl.toLowerCase()}`},`${lbl} ${camp.leads.filter(l=>l.label===lbl).length}`)))
       ),
       h('div',{className:'tbl-wrap'},
         h('table',null,
@@ -2139,11 +2081,10 @@ const CampaignsPage = ({leads,loading,onSelect,isDemo,apiBase,onRefresh}) => {
 
 /* ─── APP ROOT ────────────────────────────────────────────────── */
 function App(){
-  const savedApi=localStorage.getItem('pa_api');
-  const savedToken=localStorage.getItem('pa_token');
-  const [loggedIn, setLoggedIn]=useState(!!(savedApi)||savedApi==='DEMO');
+  const savedAuth=localStorage.getItem('pa_auth');
+  const [loggedIn, setLoggedIn]=useState(savedAuth==='1');
   const [page,     setPage]  =useState('overview');
-  const [apiBase,  setApiBase]=useState(savedApi||'DEMO');
+  const [apiBase,  setApiBase]=useState(BACKEND_URL);
   function handleLogin(base,token){
     setApiBase(base);
     setLoggedIn(true);
@@ -2257,10 +2198,10 @@ function App(){
         page==='campaign-intel' ?h(CampaignIntelPage,{apiBase,isDemo,showToast}):null
       )
     ),
-    selected  &&h(LeadModal,          {lead:selected,apiBase,isDemo,onClose:()=>setSelected(null),showToast}),
-    showBcast &&h(BroadcastModal,     {apiBase,isDemo,onClose:()=>setBcast(false),showToast,leads}),
-    showTmpl  &&h(TemplateCampaignModal,{apiBase,isDemo,onClose:()=>setTmpl(false),showToast}),
-    showConn  &&h(ConnectModal,       {apiBase,setApiBase,onClose:()=>setConn(false),showToast}),
+    selected  &&h(LeadModal,             {lead:selected,apiBase,isDemo,onClose:()=>setSelected(null),showToast}),
+    showBcast &&h(BroadcastModal,        {apiBase,isDemo,onClose:()=>setBcast(false),showToast,leads}),
+    showTmpl  &&h(TemplateCampaignModal, {apiBase,isDemo,onClose:()=>setTmpl(false),showToast}),
+    showConn  &&h(ConnectModal,          {apiBase,setApiBase,onClose:()=>setConn(false),showToast}),
     toast     &&h(Toast,{key:toast.id,msg:toast.msg,type:toast.type,onDone:()=>setToast(null)})
   );
 }
