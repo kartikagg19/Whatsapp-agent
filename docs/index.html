@@ -2033,6 +2033,10 @@ const CampaignsPage = ({leads,loading,onSelect,isDemo,apiBase,onRefresh}) => {
 
   async function openAssign(){
     setAssigning(true);
+    await loadDateCounts();
+  }
+
+  async function loadDateCounts(){
     if(apiBase&&apiBase!=='DEMO'){
       try{
         const r=await apiFetch(`${apiBase}/campaigns/date-preview`);
@@ -2297,7 +2301,7 @@ const CampaignsPage = ({leads,loading,onSelect,isDemo,apiBase,onRefresh}) => {
                 onClick:e=>{e.stopPropagation();
                   if(isNone) openAssign();
                   else if(isEmpty) setEditingMeta({origName:g.name,name:g.name,target:g.target||''});
-                  else { setAssignMode('all'); setAssignDate(''); openAssign(); setRenaming({from:g.name,to:g.name,target:g.target||'',actualTotal:g.total}); }
+                  else { setAssignMode('all'); setAssignDate(''); setRenaming({from:g.name,to:g.name,target:g.target||'',actualTotal:g.total}); loadDateCounts(); }
                 },title:isNone?'Assign leads':'Edit campaign'},
                 h('i',{className:`ti ${isNone?'ti-tag':'ti-pencil'}`}))
             )
