@@ -190,7 +190,7 @@ async function runPipeline(phone, buf) {
   let history = [], existingLead = null;
   try {
     [history, existingLead] = await Promise.all([
-      db.getHistory(phone, 10),
+      db.getHistory(phone, existingLead?.label === 'HOT' ? 10 : existingLead?.label === 'WARM' ? 8 : 6),
       db.getLeadByPhone(phone)
     ]);
   } catch (e) {

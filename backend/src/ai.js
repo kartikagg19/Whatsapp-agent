@@ -176,14 +176,38 @@ This is a bootstrap fallback prompt. The full v2.7 prompt should be loaded from 
   node backend/scripts/push_prompt.js "C:/Users/Lenovo/Desktop/Whatsapp-agent/waprompt v2.7.txt"
 `;
 
+// ── In-memory caches to avoid re-fetching on every message ───────
+let _kbCache = null;
+let _kbCacheAt = 0;
+const KB_TTL = 10 * 60 * 1000; // refresh KB every 10 minutes
+
+let _promptCache = null;
+let _promptCacheAt = 0;
+const PROMPT_TTL = 5 * 60 * 1000; // refresh prompt every 5 minutes
+
+async function getCachedKnowledge() {
+  if (_kbCache !== null && Date.now() - _kbCacheAt < KB_TTL) return _kbCache;
+  _kbCache = await getKnowledgeText();
+  _kbCacheAt = Date.now();
+  return _kbCache;
+}
+
+function getCachedSystemPrompt() {
+  if (_promptCache !== null && Date.now() - _promptCacheAt < PROMPT_TTL) return _promptCache;
+  const settings = getSettings();
+  _promptCache = (settings.system_prompt && settings.system_prompt.trim())
+    ? settings.system_prompt
+    : SYSTEM_PROMPT;
+  _promptCacheAt = Date.now();
+  return _promptCache;
+}
+
 async function callGemini(fullPrompt) {
   const settings   = getSettings();
   const model      = settings.ai_model || 'gemini-2.5-flash';
-  const basePrompt = (settings.system_prompt && settings.system_prompt.trim())
-    ? settings.system_prompt
-    : SYSTEM_PROMPT;
+  const basePrompt = getCachedSystemPrompt();
 
-  const knowledge = await getKnowledgeText();
+  const knowledge = await getCachedKnowledge();
   const knowledgeSection = knowledge
     ? `\n\n━━━━━━━━━━━━━━━━━━━━\nKNOWLEDGE BASE (project facts + media databases)\n━━━━━━━━━━━━━━━━━━━━\n${knowledge}\n━━━━━━━━━━━━━━━━━━━━\n`
     : '';
