@@ -810,18 +810,24 @@ const LoginPage = ({onLogin}) => {
     if(!pwd.trim()){setErr('Enter your password');return;}
     if(pwd.trim()!==ACCESS_PASSWORD){setErr('Incorrect password');return;}
     setBusy(true);
+    // Try to fetch token from server — but if unreachable, still log in
+    // Password is already verified above so it's safe to proceed offline
     try{
-      const r=await fetch(`${BACKEND_URL}/access`);
+      const controller=new AbortController();
+      const timeout=setTimeout(()=>controller.abort(),5000); // 5s timeout
+      const r=await fetch(`${BACKEND_URL}/access`,{signal:controller.signal});
+      clearTimeout(timeout);
       if(r.ok){
         const d=await r.json();
-        localStorage.setItem('pa_api',BACKEND_URL);
         localStorage.setItem('pa_token',d.token||'');
-        localStorage.setItem('pa_auth','1');
-        onLogin(BACKEND_URL,d.token||'');
-      } else {
-        setErr('Cannot reach server. Try again.');
       }
-    }catch{setErr('Cannot reach server. Check your internet.');}
+    }catch{
+      // Server unreachable or slow — still allow login with password
+      // Dashboard will show data once server responds
+    }
+    localStorage.setItem('pa_api',BACKEND_URL);
+    localStorage.setItem('pa_auth','1');
+    onLogin(BACKEND_URL,'');
     setBusy(false);
   }
 
