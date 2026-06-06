@@ -45,10 +45,25 @@ async function upsertLead({ phone, name, score, label, intent, budget_range, loc
   }
 }
 
-async function getAllLeads(limit = 5000) {
-  const { data, error } = await getDB().from('leads').select('*').order('updated_at', { ascending: false }).limit(limit);
-  if (error) throw error;
-  return data || [];
+async function getAllLeads(limit = 10000) {
+  // Supabase PostgREST caps at 1000 rows per request — paginate to get all leads
+  const PAGE = 1000;
+  let all = [];
+  let from = 0;
+  while (all.length < limit) {
+    const fetchTo = Math.min(from + PAGE - 1, limit - 1);
+    const { data, error } = await getDB()
+      .from('leads')
+      .select('*')
+      .order('updated_at', { ascending: false })
+      .range(from, fetchTo);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    all = all.concat(data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+  return all;
 }
 
 async function getLeadByPhone(phone) {

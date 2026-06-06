@@ -428,6 +428,7 @@ const TemplateCampaignModal = ({apiBase,isDemo,onClose,showToast}) => {
   const [tmplName,setTmplName]=useState('');
   const [lang,setLang]=useState('en');
   const [param1,setParam1]=useState('');
+  const [campName,setCampName]=useState('');
   const [busy,setBusy]=useState(false);
   const [result,setResult]=useState(null);
   const [templates,setTemplates]=useState([]);
@@ -451,8 +452,9 @@ const TemplateCampaignModal = ({apiBase,isDemo,onClose,showToast}) => {
     setBusy(true);setResult(null);
     try{
       const params=param1.trim()?[param1.trim()]:[];
-      const r=await apiFetch(`${apiBase}/broadcast-template`,{method:'POST',
-        body:JSON.stringify({phones:list,template_name:tmplName.trim(),language:lang,params})});
+      const body={phones:list,template_name:tmplName.trim(),language:lang,params};
+      if(campName.trim()) body.campaign=campName.trim();
+      const r=await apiFetch(`${apiBase}/broadcast-template`,{method:'POST',body:JSON.stringify(body)});
       const d=await r.json();
       if(d.success){
         setResult(d);
@@ -511,6 +513,11 @@ const TemplateCampaignModal = ({apiBase,isDemo,onClose,showToast}) => {
           h('label',{className:'form-label'},'Variable {{1}} — Customer Name (optional)'),
           h('input',{value:param1,onChange:e=>setParam1(e.target.value),
             placeholder:'e.g. Rahul  (same name sent to all — leave blank if template has no variables)'})
+        ),
+        h('div',{className:'form-field',style:{marginTop:'10px'}},
+          h('label',{className:'form-label'},'Campaign Name (optional — tags leads so they appear in Campaigns page)'),
+          h('input',{value:campName,onChange:e=>setCampName(e.target.value),
+            placeholder:'e.g. Day 1, WhatsApp Blast June, Krishna Aura Launch'})
         ),
         h('div',{className:'notice',style:{marginTop:'4px',fontSize:'11px'}},
           h('i',{className:'ti ti-bulb'}),

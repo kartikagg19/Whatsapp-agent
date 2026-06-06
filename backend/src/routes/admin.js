@@ -810,7 +810,7 @@ router.post('/broadcast', async (req, res) => {
 // OR:   { phones: [...], template_name: "...", language: "en", params_map: {"919876543210": ["Rahul"], ...} }
 router.post('/broadcast-template', async (req, res) => {
   try {
-    const { phones, template_name, language = 'en', params = [], params_map = {} } = req.body;
+    const { phones, template_name, language = 'en', params = [], params_map = {}, campaign } = req.body;
     if (!phones || !Array.isArray(phones) || phones.length === 0)
       return res.status(400).json({ error: 'phones array required' });
     if (!template_name)
@@ -840,7 +840,7 @@ router.post('/broadcast-template', async (req, res) => {
       try {
         await sendTemplate(phone, template_name, r.language, r.params);
         await db.saveMessage({ phone, role: 'assistant', message: `[TEMPLATE:${template_name}] ${r.params.join(', ')}` });
-        await db.upsertLead({ phone, name: rawParams[0] || 'Unknown', score: 3, label: 'COLD', intent: 'general' });
+        await db.upsertLead({ phone, name: rawParams[0] || 'Unknown', score: 3, label: 'COLD', intent: 'general', ...(campaign ? { campaign } : {}) });
         sent++;
         await new Promise(r => setTimeout(r, 350)); // stay under rate limit
       } catch (e) {
