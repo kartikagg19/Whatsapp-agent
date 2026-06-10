@@ -74,7 +74,7 @@ create index if not exists ca_intent_idx       on conversation_analysis(customer
 
 -- ── View 1: daily_campaign_metrics ────────────────────────────────
 -- Drives the Overview panel. One row per day for the last 30 days.
-create or replace view daily_campaign_metrics as
+create or replace view daily_campaign_metrics with (security_invoker = on) as
 select
   date_trunc('day', created_at)::date           as day,
   count(*)                                       as total_exchanges,
@@ -97,7 +97,7 @@ order by 1 desc;
 
 -- ── View 2: sales_funnel ──────────────────────────────────────────
 -- Drives the Funnel panel. Unique customers per stage, last 7 days.
-create or replace view sales_funnel as
+create or replace view sales_funnel with (security_invoker = on) as
 with latest_per_phone as (
   select distinct on (phone)
     phone, sales_stage, response_quality_score, created_at
@@ -124,7 +124,7 @@ end;
 
 -- ── View 3: issue_frequency ───────────────────────────────────────
 -- Drives the Issues panel. % of last-7-day exchanges that hit each issue.
-create or replace view issue_frequency as
+create or replace view issue_frequency with (security_invoker = on) as
 with totals as (
   select count(*)::numeric as total
   from conversation_analysis
@@ -165,7 +165,7 @@ order by c.cnt desc;
 
 -- ── View 4: hallucination_log ─────────────────────────────────────
 -- Drives the Hallucinations panel. All flagged claims, newest first.
-create or replace view hallucination_log as
+create or replace view hallucination_log with (security_invoker = on) as
 select
   id,
   created_at,
@@ -183,7 +183,7 @@ limit 500;
 
 -- ── View 5: objection_breakdown ───────────────────────────────────
 -- Drives the Objections panel. Type / count / handle rate.
-create or replace view objection_breakdown as
+create or replace view objection_breakdown with (security_invoker = on) as
 select
   objection_type,
   count(*)                                       as occurrences,
@@ -205,7 +205,7 @@ order by occurrences desc;
 -- first-N-words signature stored in bot_phrase. Each group also tags
 -- which rule_flags / issues most commonly co-occur with that phrase,
 -- so a phrase that always fires no_cta jumps out.
-create or replace view bot_recurring_patterns as
+create or replace view bot_recurring_patterns with (security_invoker = on) as
 with totals as (
   select count(*)::numeric as total
   from conversation_analysis
@@ -237,7 +237,7 @@ limit 50;
 -- patterns. Especially useful for finding intents the prompt doesn't
 -- handle well: if "loan kaise milega" appears 200 times and the bot's
 -- handle rate on those is 40%, that's a specific prompt gap.
-create or replace view user_recurring_patterns as
+create or replace view user_recurring_patterns with (security_invoker = on) as
 with totals as (
   select count(*)::numeric as total
   from conversation_analysis
@@ -271,7 +271,7 @@ limit 50;
 --   - top concerns
 --   - missed-signal rate (how often did the customer drop a buying
 --     signal the bot ignored — high value, low effort to fix)
-create or replace view customer_behavior as
+create or replace view customer_behavior with (security_invoker = on) as
 with t as (
   select count(*)::numeric as total
   from conversation_analysis
@@ -317,7 +317,7 @@ order by kind, cnt desc;
 -- Single number: % of evaluated exchanges where the customer dropped
 -- a buying signal the bot ignored. If this is >15%, the prompt isn't
 -- catching intent cues — high-impact place to focus.
-create or replace view missed_signals_summary as
+create or replace view missed_signals_summary with (security_invoker = on) as
 select
   count(*) filter (where missed_signal = true)                                          as missed_count,
   count(*) filter (where missed_signal is not null)                                     as evaluated_count,
