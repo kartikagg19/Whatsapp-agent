@@ -202,9 +202,24 @@ function getCachedSystemPrompt() {
   return _promptCache;
 }
 
+// Valid Gemini model names — fall back to 2.0-flash if settings has a bad name
+const VALID_GEMINI_MODELS = [
+  'gemini-2.5-flash', 'gemini-2.5-pro',
+  'gemini-2.0-flash', 'gemini-2.0-flash-lite',
+  'gemini-1.5-flash', 'gemini-1.5-pro',
+];
+const FALLBACK_MODEL = 'gemini-2.0-flash';
+
 async function callGemini(fullPrompt) {
   const settings   = getSettings();
-  const model      = settings.ai_model || 'gemini-2.5-flash';
+  let model        = (settings.ai_model || FALLBACK_MODEL).trim();
+
+  // Sanitise: if dashboard has a typo (e.g. "gemini-0.0"), fall back gracefully
+  if (!VALID_GEMINI_MODELS.includes(model)) {
+    console.warn(`⚠️  ai.js: unknown model "${model}", falling back to ${FALLBACK_MODEL}`);
+    model = FALLBACK_MODEL;
+  }
+
   const basePrompt = getCachedSystemPrompt();
 
   const knowledge = await getCachedKnowledge();
@@ -214,18 +229,31 @@ async function callGemini(fullPrompt) {
 
   const systemPrompt = basePrompt + knowledgeSection + OUTPUT_FORMAT;
 
-  // NOTE: no responseMimeType — v2.7 emits text + fenced JSON, not pure JSON.
-  const response = await ai.models.generateContent({
-    model,
-    contents: [{ role: "user", parts: [{ text: fullPrompt }] }],
-    config: { systemInstruction: systemPrompt },
-  });
-  return {
-    text:         response.text || "",
-    inputTokens:  response.usageMetadata?.promptTokenCount     || 0,
-    outputTokens: response.usageMetadata?.candidatesTokenCount || 0,
-    model
-  };
+  // Retry up to 3 times on transient errors (rate limit, 503, timeout)
+  let lastErr;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: [{ role: "user", parts: [{ text: fullPrompt }] }],
+        config: { systemInstruction: systemPrompt },
+      });
+      return {
+        text:         response.text || "",
+        inputTokens:  response.usageMetadata?.promptTokenCount     || 0,
+        outputTokens: response.usageMetadata?.candidatesTokenCount || 0,
+        model
+      };
+    } catch (err) {
+      lastErr = err;
+      const status = err?.status || err?.response?.status || 0;
+      const isTransient = status === 429 || status === 503 || status === 500 || !status;
+      console.error(`❌ Gemini attempt ${attempt}/3 failed (status=${status}): ${err.message}`);
+      if (!isTransient || attempt === 3) break;
+      await new Promise(r => setTimeout(r, attempt * 1500)); // 1.5s, 3s backoff
+    }
+  }
+  throw lastErr;
 }
 
 // Parse the model's raw output. Handles three shapes:
