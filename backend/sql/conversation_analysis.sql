@@ -328,6 +328,14 @@ select
 from conversation_analysis
 where created_at > now() - interval '7 days';
 
+-- ── RLS (Row Level Security) ──────────────────────────────────────
+-- Required to satisfy Supabase Security Advisor. The backend uses
+-- service_role key which bypasses RLS automatically — this won't
+-- change any existing behaviour.
+alter table public.conversation_analysis enable row level security;
+create policy if not exists "backend_service_role_access" on public.conversation_analysis
+  for all to service_role using (true) with check (true);
+
 -- ── Done ──────────────────────────────────────────────────────────
 -- After running this, the analyzer in the backend will start writing
 -- rows automatically. You don't need to touch SQL again.
