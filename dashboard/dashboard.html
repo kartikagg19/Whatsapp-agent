@@ -368,7 +368,7 @@ const LeadModal = ({lead,apiBase,isDemo,onClose,showToast}) => {
                 setUploading(true);
                 try{
                   const fd=new FormData();fd.append('file',file);
-                  const r=await fetch(`${apiBase}/upload-media`,{method:'POST',body:fd});
+                  const r=await apiFetch(`${apiBase}/upload-media`,{method:'POST',body:fd});
                   const d=await r.json();
                   if(d.success){setAttachFile({media_id:d.media_id,type:d.type,filename:d.filename});showToast(`${d.filename} ready`,'success');}
                   else showToast(d.error||'Upload failed','err');
@@ -459,7 +459,7 @@ const BroadcastModal = ({apiBase,isDemo,onClose,showToast,leads}) => {
                   setUploading(true);
                   try{
                     const fd=new FormData();fd.append('file',file);
-                    const r=await fetch(`${apiBase}/upload-media`,{method:'POST',body:fd});
+                    const r=await apiFetch(`${apiBase}/upload-media`,{method:'POST',body:fd});
                     const d=await r.json();
                     if(d.success){setAttachFile({media_id:d.media_id,type:d.type,filename:d.filename});showToast(`${d.filename} ready — will be sent to all ${count} leads`,'success');}
                     else showToast(d.error||'Upload failed','err');
