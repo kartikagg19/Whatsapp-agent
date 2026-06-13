@@ -127,6 +127,39 @@ async function sendDocument(to, fileUrl, filename, caption) {
   }
 }
 
+// Upload a local file to Meta's media servers → returns media_id
+// Used for dashboard file-upload feature so we don't need a public URL
+async function uploadMedia(filePath, mimeType, filename) {
+  const FormData = require('form-data');
+  const fs = require('fs');
+  const form = new FormData();
+  form.append('messaging_product', 'whatsapp');
+  form.append('type', mimeType);
+  form.append('file', fs.createReadStream(filePath), { filename: filename || 'upload', contentType: mimeType });
+  const r = await axios.post(`${API}/${PHONE()}/media`, form, {
+    headers: { ...form.getHeaders(), Authorization: `Bearer ${TOKEN()}` }
+  });
+  return r.data.id;
+}
+
+// Send document using Meta media_id (no public URL needed)
+async function sendDocumentById(to, mediaId, filename, caption) {
+  await axios.post(`${API}/${PHONE()}/messages`, {
+    messaging_product: 'whatsapp', to, type: 'document',
+    document: { id: mediaId, filename: filename || 'document.pdf', caption: caption || '' }
+  }, { headers: HEADER() });
+  console.log(`📎 Document(id) sent to ${to}: ${filename}`);
+}
+
+// Send image using Meta media_id
+async function sendImageById(to, mediaId, caption) {
+  await axios.post(`${API}/${PHONE()}/messages`, {
+    messaging_product: 'whatsapp', to, type: 'image',
+    image: { id: mediaId, caption: caption || '' }
+  }, { headers: HEADER() });
+  console.log(`🖼️ Image(id) sent to ${to}`);
+}
+
 // ── TEMPLATE MESSAGE (for first-contact / new numbers) ──────────
 // Use this when user has NEVER messaged you — free text won't deliver.
 // templateName: approved template name (e.g. "dreamhome_intro")
@@ -159,4 +192,4 @@ async function sendTemplate(to, templateName, languageCode = 'en', params = []) 
   }
 }
 
-module.exports = { sendText, sendImage, sendDocument, sendButtons, markRead, markReadWithTyping, alertSales, parseMessage, sendTemplate, isImageUrl };
+module.exports = { sendText, sendImage, sendDocument, sendDocumentById, sendImageById, uploadMedia, sendButtons, markRead, markReadWithTyping, alertSales, parseMessage, sendTemplate, isImageUrl };

@@ -9,7 +9,8 @@ const path     = require('path');
 const multer   = require('multer');
 const pdfParse = require('pdf-parse');
 const db       = require('../database');
-const { sendText, sendTemplate, sendDocument, sendImage } = require('../whatsapp');
+const { sendText, sendTemplate, sendDocument, sendImage, sendDocumentById, sendImageById, uploadMedia } = require('../whatsapp');
+const fs = require('fs');
 const { syncTimeline } = require('../crmClient');
 
 const diskStorage = multer.diskStorage({
@@ -789,16 +790,19 @@ router.post('/send', async (req, res) => {
 // Body: { label: "WARM", message: "...", document_url: "...", image_url: "...", document_name: "brochure.pdf" }
 router.post('/broadcast', async (req, res) => {
   try {
-    const { label, message, document_url, image_url, document_name } = req.body;
+    const { label, message, document_url, image_url, document_name, media_id, media_type, media_filename } = req.body;
     if (!label || !message) return res.status(400).json({ error: 'label and message required' });
     const leads = (await db.getAllLeads()).filter(l => l.label === label.toUpperCase());
     let sent = 0, failed = 0;
     for (const lead of leads) {
       try {
         await sendText(lead.phone, message);
-        if (document_url) await sendDocument(lead.phone, document_url, document_name || 'document.pdf');
+        if (media_id && media_type === 'image') await sendImageById(lead.phone, media_id);
+        else if (media_id) await sendDocumentById(lead.phone, media_id, media_filename || 'document.pdf');
+        else if (document_url) await sendDocument(lead.phone, document_url, document_name || 'document.pdf');
         else if (image_url) await sendImage(lead.phone, image_url);
-        await db.saveMessage({ phone: lead.phone, role: 'assistant', message: `[BROADCAST] ${message}${document_url ? ' [+PDF]' : image_url ? ' [+Image]' : ''}` });
+        const attachLabel = media_id ? ` [+${media_type==='image'?'Image':'PDF'}]` : document_url ? ' [+PDF]' : image_url ? ' [+Image]' : '';
+        await db.saveMessage({ phone: lead.phone, role: 'assistant', message: `[BROADCAST] ${message}${attachLabel}` });
         sent++;
         await new Promise(r => setTimeout(r, 300));
       } catch { failed++; }
@@ -807,20 +811,44 @@ router.post('/broadcast', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// POST /api/upload-media — upload a file from dashboard to Meta servers → returns media_id
+// Accepts multipart/form-data with field "file"
+router.post('/upload-media', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const mediaId = await uploadMedia(req.file.path, req.file.mimetype, req.file.originalname);
+    const type = req.file.mimetype.startsWith('image/') ? 'image' : 'document';
+    res.json({ success: true, media_id: mediaId, type, filename: req.file.originalname });
+    fs.unlink(req.file.path, () => {});
+  } catch (e) {
+    console.error('❌ upload-media failed:', e.response?.data || e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/send-media — send document or image to a single lead from dashboard
-// Body: { phone, document_url, image_url, document_name, caption }
+// Body: { phone, media_id, type, filename, caption }
 router.post('/send-media', async (req, res) => {
   try {
-    const { phone, document_url, image_url, document_name, caption } = req.body;
+    const { phone, media_id, type, filename, caption, document_url, image_url, document_name } = req.body;
     if (!phone) return res.status(400).json({ error: 'phone required' });
-    if (!document_url && !image_url) return res.status(400).json({ error: 'document_url or image_url required' });
-    const normalizedPhone = String(phone).replace(/\D/g, '');
-    if (document_url) {
-      await sendDocument(normalizedPhone, document_url, document_name || 'document.pdf', caption || '');
-      await db.saveMessage({ phone: normalizedPhone, role: 'assistant', message: `[DOC] ${document_url}` });
+    const p = String(phone).replace(/\D/g, '');
+    if (media_id) {
+      if (type === 'image') {
+        await sendImageById(p, media_id, caption || '');
+        await db.saveMessage({ phone: p, role: 'assistant', message: `[IMG] ${filename || 'image'}` });
+      } else {
+        await sendDocumentById(p, media_id, filename || 'document.pdf', caption || '');
+        await db.saveMessage({ phone: p, role: 'assistant', message: `[DOC] ${filename || 'document.pdf'}` });
+      }
+    } else if (document_url) {
+      await sendDocument(p, document_url, document_name || 'document.pdf', caption || '');
+      await db.saveMessage({ phone: p, role: 'assistant', message: `[DOC] ${document_url}` });
+    } else if (image_url) {
+      await sendImage(p, image_url, caption || '');
+      await db.saveMessage({ phone: p, role: 'assistant', message: `[IMG] ${image_url}` });
     } else {
-      await sendImage(normalizedPhone, image_url, caption || '');
-      await db.saveMessage({ phone: normalizedPhone, role: 'assistant', message: `[IMG] ${image_url}` });
+      return res.status(400).json({ error: 'media_id, document_url or image_url required' });
     }
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
