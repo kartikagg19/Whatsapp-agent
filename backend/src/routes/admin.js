@@ -10,7 +10,6 @@ const multer   = require('multer');
 const pdfParse = require('pdf-parse');
 const db       = require('../database');
 const { sendText, sendTemplate, sendDocument, sendImage, sendDocumentById, sendImageById, uploadMedia } = require('../whatsapp');
-const fs = require('fs');
 const { syncTimeline } = require('../crmClient');
 
 const diskStorage = multer.diskStorage({
