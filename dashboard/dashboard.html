@@ -301,6 +301,9 @@ const LeadModal = ({lead,apiBase,isDemo,onClose,showToast}) => {
   const [convos,setConvos]=useState(null);
   const [msg,setMsg]=useState('');
   const [busy,setBusy]=useState(false);
+  const [attachType,setAttachType]=useState('none'); // 'none' | 'document' | 'image'
+  const [attachUrl,setAttachUrl]=useState('');
+  const [attachName,setAttachName]=useState('');
   useEffect(()=>{
     if(isDemo){setConvos(DEMO_CONVOS);return;}
     apiFetch(`${apiBase}/leads/${lead.phone}`).then(r=>r.json()).then(d=>setConvos(d.data?.conversations||[])).catch(()=>setConvos([]));
@@ -312,8 +315,16 @@ const LeadModal = ({lead,apiBase,isDemo,onClose,showToast}) => {
     try{
       const r=await apiFetch(`${apiBase}/send`,{method:'POST',body:JSON.stringify({phone:lead.phone,message:msg})});
       const d=await r.json();
-      if(d.success){showToast('Message sent','success');setMsg('');}
-      else showToast(d.error||'Failed','err');
+      if(d.success){
+        // Send attachment if provided
+        if(attachType!=='none'&&attachUrl.trim()){
+          const body=attachType==='document'
+            ?{phone:lead.phone,document_url:attachUrl.trim(),document_name:attachName.trim()||'document.pdf'}
+            :{phone:lead.phone,image_url:attachUrl.trim()};
+          await apiFetch(`${apiBase}/send-media`,{method:'POST',body:JSON.stringify(body)}).catch(()=>{});
+        }
+        showToast('Message sent','success');setMsg('');setAttachUrl('');setAttachName('');setAttachType('none');
+      } else showToast(d.error||'Failed','err');
     }catch{showToast('Cannot connect to backend','err');}
     setBusy(false);
   }
@@ -351,6 +362,25 @@ const LeadModal = ({lead,apiBase,isDemo,onClose,showToast}) => {
         ),
         h('div',{className:'sect-label'},'Send Message'),
         h('textarea',{value:msg,onChange:e=>setMsg(e.target.value),placeholder:'Type a follow-up message...'}),
+        // ── Attachment section ──
+        h('div',{style:{marginTop:'10px',background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:'var(--r)',padding:'10px 12px'}},
+          h('div',{style:{display:'flex',alignItems:'center',gap:'8px',marginBottom: attachType==='none'?0:'10px'}},
+            h('i',{className:'ti ti-paperclip',style:{fontSize:'13px',color:'var(--text3)'}}),
+            h('span',{style:{fontSize:'12px',fontWeight:500,color:'var(--text2)'}}, 'Attach'),
+            ['none','document','image'].map(t=>h('button',{key:t,
+              onClick:()=>setAttachType(t),
+              style:{padding:'3px 10px',borderRadius:'20px',border:'1px solid',fontSize:'11px',cursor:'pointer',
+                background:attachType===t?'var(--text1)':'transparent',
+                color:attachType===t?'#fff':'var(--text2)',
+                borderColor:attachType===t?'var(--text1)':'var(--border2)'
+              }},t==='none'?'None':t==='document'?'📄 PDF / Doc':'🖼️ Image'))
+          ),
+          attachType==='document'&&h('div',{style:{display:'flex',gap:'8px'}},
+            h('input',{value:attachUrl,onChange:e=>setAttachUrl(e.target.value),placeholder:'Paste PDF URL (must be publicly accessible)',style:{flex:1}}),
+            h('input',{value:attachName,onChange:e=>setAttachName(e.target.value),placeholder:'Filename (e.g. brochure.pdf)',style:{width:'160px'}})
+          ),
+          attachType==='image'&&h('input',{value:attachUrl,onChange:e=>setAttachUrl(e.target.value),placeholder:'Paste image URL (JPG/PNG — must be publicly accessible)',style:{width:'100%'}})
+        ),
         h('div',{style:{marginTop:'8px'}},
           h('button',{className:'btn btn-primary btn-sm',onClick:send,disabled:busy||!msg.trim()},
             busy?h(Spinner):h('i',{className:'ti ti-send'}),' ',busy?'Sending...':'Send on WhatsApp'))
@@ -365,6 +395,9 @@ const BroadcastModal = ({apiBase,isDemo,onClose,showToast,leads}) => {
   const [msg,setMsg]=useState('');
   const [busy,setBusy]=useState(false);
   const [result,setResult]=useState(null);
+  const [attachType,setAttachType]=useState('none');
+  const [attachUrl,setAttachUrl]=useState('');
+  const [attachName,setAttachName]=useState('');
   const count=leads.filter(l=>l.label===tier).length;
   const templates=[
     {l:'Site Visit', m:'Ji! Is weekend site visits available hain. Kya main aapke liye slot book karoon?'},
@@ -376,7 +409,10 @@ const BroadcastModal = ({apiBase,isDemo,onClose,showToast,leads}) => {
     if(isDemo){showToast('Demo mode — connect backend to broadcast','err');return;}
     setBusy(true);setResult(null);
     try{
-      const r=await apiFetch(`${apiBase}/broadcast`,{method:'POST',body:JSON.stringify({label:tier,message:msg})});
+      const body={label:tier,message:msg};
+      if(attachType==='document'&&attachUrl.trim()){body.document_url=attachUrl.trim();body.document_name=attachName.trim()||'document.pdf';}
+      else if(attachType==='image'&&attachUrl.trim()){body.image_url=attachUrl.trim();}
+      const r=await apiFetch(`${apiBase}/broadcast`,{method:'POST',body:JSON.stringify(body)});
       const d=await r.json();
       if(d.success){setResult(d);showToast(`Sent to ${d.sent} leads`,'success');}
       else showToast(d.error||'Failed','err');
@@ -409,6 +445,24 @@ const BroadcastModal = ({apiBase,isDemo,onClose,showToast,leads}) => {
         h('div',{className:'form-field'},
           h('label',{className:'form-label'},`Message — goes to ${count} lead${count!==1?'s':''}`),
           h('textarea',{value:msg,onChange:e=>setMsg(e.target.value),placeholder:'Type your message here...',style:{minHeight:'96px'}})
+        ),
+        // ── Attachment section ──
+        h('div',{className:'form-field',style:{marginBottom:'4px'}},
+          h('label',{className:'form-label'},'Attachment (optional)'),
+          h('div',{style:{display:'flex',gap:'6px',marginBottom: attachType==='none'?0:'10px'}},
+            ['none','document','image'].map(t=>h('button',{key:t,
+              onClick:()=>setAttachType(t),
+              style:{padding:'4px 12px',borderRadius:'20px',border:'1px solid',fontSize:'11px',cursor:'pointer',
+                background:attachType===t?'var(--text1)':'transparent',
+                color:attachType===t?'#fff':'var(--text2)',
+                borderColor:attachType===t?'var(--text1)':'var(--border2)'
+              }},t==='none'?'None':t==='document'?'📄 PDF / Doc':'🖼️ Image'))
+          ),
+          attachType==='document'&&h('div',{style:{display:'flex',gap:'8px'}},
+            h('input',{value:attachUrl,onChange:e=>setAttachUrl(e.target.value),placeholder:'Paste PDF URL (publicly accessible)',style:{flex:1}}),
+            h('input',{value:attachName,onChange:e=>setAttachName(e.target.value),placeholder:'brochure.pdf',style:{width:'140px'}})
+          ),
+          attachType==='image'&&h('input',{value:attachUrl,onChange:e=>setAttachUrl(e.target.value),placeholder:'Paste image URL (JPG/PNG — publicly accessible)',style:{width:'100%'}})
         ),
         result&&h('div',{style:{background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:'var(--r)',padding:'9px 13px',fontSize:'12px',color:'var(--text2)',fontFamily:'var(--mono)'}},
           `Sent: ${result.sent}   Failed: ${result.failed||0}   Total: ${result.total}`)
