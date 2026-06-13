@@ -128,16 +128,17 @@ async function sendDocument(to, fileUrl, filename, caption) {
 }
 
 // Upload a local file to Meta's media servers → returns media_id
-// Used for dashboard file-upload feature so we don't need a public URL
+// Uses Node 18+ built-in FormData + Blob (no extra package needed)
 async function uploadMedia(filePath, mimeType, filename) {
-  const FormData = require('form-data');
   const fs = require('fs');
+  const fileBuffer = fs.readFileSync(filePath);
+  const blob = new Blob([fileBuffer], { type: mimeType });
   const form = new FormData();
   form.append('messaging_product', 'whatsapp');
   form.append('type', mimeType);
-  form.append('file', fs.createReadStream(filePath), { filename: filename || 'upload', contentType: mimeType });
+  form.append('file', blob, filename || 'upload');
   const r = await axios.post(`${API}/${PHONE()}/media`, form, {
-    headers: { ...form.getHeaders(), Authorization: `Bearer ${TOKEN()}` }
+    headers: { Authorization: `Bearer ${TOKEN()}` }
   });
   return r.data.id;
 }
