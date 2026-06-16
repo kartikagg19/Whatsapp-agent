@@ -906,11 +906,7 @@ const LoginPage = ({onLogin}) => {
   return h('div',{className:'login-wrap'},
     h('div',{className:'login-box'},
       h('div',{className:'login-logo'},
-        h('div',{className:'login-logo-mark'},h('i',{className:'ti ti-robot'})),
-        h('div',null,
-          h('div',{className:'login-logo-name'},'Propello AI'),
-          h('div',{className:'login-logo-sub'},'Lead Dashboard')
-        )
+        h('img',{src:'./propello-logo.png',alt:'Propello AI',style:{height:'48px',width:'auto',objectFit:'contain',marginBottom:'8px'}})
       ),
       h('div',{className:'login-title'},'Welcome back'),
       h('div',{className:'login-sub'},'Enter your password to access the dashboard'),
@@ -2519,11 +2515,7 @@ function App(){
     h('aside',{className:'sidebar'},
       h('div',{className:'sb-top'},
         h('div',{className:'brand'},
-          h('div',{className:'brand-mark'},h('i',{className:'ti ti-robot'})),
-          h('div',{className:'brand-text'},
-            h('div',{className:'brand-name'},'Propello AI'),
-            h('div',{className:'brand-tag'},'Lead Dashboard')
-          )
+          h('img',{src:'./propello-logo.png',alt:'Propello AI',style:{height:'36px',width:'auto',objectFit:'contain'}})
         )
       ),
       h('nav',{className:'sb-nav'},
