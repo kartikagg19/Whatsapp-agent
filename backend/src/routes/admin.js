@@ -152,7 +152,7 @@ function getToken() {
 }
 
 function requireAuth(req, res, next) {
-  if (req.path === '/login' || req.path === '/access' || req.path === '/stats' || req.path === '/whatsapp-test' || req.path === '/ai-test' || req.path === '/send' || req.path === '/kb-debug' || req.path === '/export/csv') return next();
+  if (req.path === '/login' || req.path === '/access' || req.path === '/stats' || req.path === '/whatsapp-test' || req.path === '/ai-test' || req.path === '/send' || req.path === '/send-media' || req.path === '/kb-debug' || req.path === '/export/csv') return next();
   const token = (req.headers['authorization'] || '').replace('Bearer ', '').trim();
   if (!token || token !== getToken()) {
     return res.status(401).json({ error: 'Unauthorized' });
