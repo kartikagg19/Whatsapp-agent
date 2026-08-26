@@ -41,6 +41,15 @@ router.post('/', async (req, res) => {
   try { body = JSON.parse(req.body.toString()); } catch { return; }
   if (body.object !== 'whatsapp_business_account') return;
 
+  // If a second ("broadcast") number is configured, it's send-only from
+  // this backend — no AI, no lead pipeline. Whoever owns that number
+  // replies manually (e.g. from their phone via WhatsApp's Coexistence
+  // mode), so any inbound webhook for it is ignored here.
+  const incomingPhoneNumberId = body?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
+  if (incomingPhoneNumberId && process.env.WHATSAPP_PHONE_NUMBER_ID_2 && incomingPhoneNumberId === process.env.WHATSAPP_PHONE_NUMBER_ID_2) {
+    return;
+  }
+
   const msg = parseMessage(body);
   if (!msg || !msg.text || processing.has(msg.messageId)) return;
   processing.add(msg.messageId);

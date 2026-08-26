@@ -3,18 +3,46 @@
 // ================================================================
 const axios  = require('axios');
 const API    = 'https://graph.facebook.com/v22.0';
-const PHONE  = () => process.env.WHATSAPP_PHONE_NUMBER_ID;
-const TOKEN  = () => process.env.WHATSAPP_TOKEN;
-const HEADER = () => ({ Authorization: `Bearer ${TOKEN()}`, 'Content-Type': 'application/json' });
+
+// ── CHANNELS ─────────────────────────────────────────────────────
+// Supports more than one WhatsApp number. "primary" is the original
+// AI-agent number. "broadcast" is an optional second number used only
+// for outbound broadcasts/templates from the dashboard (no AI replies —
+// see webhook.js, which ignores inbound messages for this channel).
+const CHANNELS = {
+  primary:   { phoneId: () => process.env.WHATSAPP_PHONE_NUMBER_ID,   token: () => process.env.WHATSAPP_TOKEN,   waba: () => process.env.WABA_ID   || '' },
+  broadcast: { phoneId: () => process.env.WHATSAPP_PHONE_NUMBER_ID_2, token: () => process.env.WHATSAPP_TOKEN_2, waba: () => process.env.WABA_ID_2 || '' }
+};
+
+function isChannelConfigured(channel) {
+  const c = CHANNELS[channel];
+  return !!(c && c.phoneId() && c.token());
+}
+
+// List channels available to the dashboard (only ones with credentials set).
+function getChannels() {
+  const list = [];
+  if (isChannelConfigured('primary')) list.push({ key: 'primary', label: 'Primary (AI Agent)' });
+  if (isChannelConfigured('broadcast')) list.push({ key: 'broadcast', label: process.env.WHATSAPP_2_LABEL || 'Broadcast Number' });
+  return list;
+}
+
+function getWabaId(channel = 'primary') {
+  return (CHANNELS[channel] || CHANNELS.primary).waba();
+}
+
+const PHONE  = (channel = 'primary') => (CHANNELS[channel] || CHANNELS.primary).phoneId();
+const TOKEN  = (channel = 'primary') => (CHANNELS[channel] || CHANNELS.primary).token();
+const HEADER = (channel = 'primary') => ({ Authorization: `Bearer ${TOKEN(channel)}`, 'Content-Type': 'application/json' });
 
 // Send plain text message
-async function sendText(to, text) {
+async function sendText(to, text, channel = 'primary') {
   try {
-    const res = await axios.post(`${API}/${PHONE()}/messages`, {
+    const res = await axios.post(`${API}/${PHONE(channel)}/messages`, {
       messaging_product: 'whatsapp',
       to, type: 'text',
       text: { body: text, preview_url: false }
-    }, { headers: HEADER() });
+    }, { headers: HEADER(channel) });
     console.log(`✅ Sent to ${to}`);
     return res.data;
   } catch (err) {
@@ -24,26 +52,26 @@ async function sendText(to, text) {
 }
 
 // Send message with buttons (max 3 buttons)
-async function sendButtons(to, body, buttons) {
+async function sendButtons(to, body, buttons, channel = 'primary') {
   try {
-    await axios.post(`${API}/${PHONE()}/messages`, {
+    await axios.post(`${API}/${PHONE(channel)}/messages`, {
       messaging_product: 'whatsapp', to, type: 'interactive',
       interactive: {
         type: 'button', body: { text: body },
         action: { buttons: buttons.map(b => ({ type: 'reply', reply: { id: b.id, title: b.title } })) }
       }
-    }, { headers: HEADER() });
+    }, { headers: HEADER(channel) });
   } catch {
-    await sendText(to, body); // fallback to plain text
+    await sendText(to, body, channel); // fallback to plain text
   }
 }
 
 // Mark message as read (blue ticks)
-async function markRead(messageId) {
+async function markRead(messageId, channel = 'primary') {
   try {
-    await axios.post(`${API}/${PHONE()}/messages`, {
+    await axios.post(`${API}/${PHONE(channel)}/messages`, {
       messaging_product: 'whatsapp', status: 'read', message_id: messageId
-    }, { headers: HEADER() });
+    }, { headers: HEADER(channel) });
   } catch { /* non-critical */ }
 }
 
@@ -51,17 +79,17 @@ async function markRead(messageId) {
 // 25s OR until the next outbound message — whichever comes first.
 // Falls back silently to a plain read-receipt if the API rejects the
 // typing field (older WABA tier, etc).
-async function markReadWithTyping(messageId) {
+async function markReadWithTyping(messageId, channel = 'primary') {
   try {
-    await axios.post(`${API}/${PHONE()}/messages`, {
+    await axios.post(`${API}/${PHONE(channel)}/messages`, {
       messaging_product: 'whatsapp',
       status: 'read',
       message_id: messageId,
       typing_indicator: { type: 'text' }
-    }, { headers: HEADER() });
+    }, { headers: HEADER(channel) });
   } catch {
     // Typing not supported — fall back to plain read receipt.
-    markRead(messageId).catch(() => {});
+    markRead(messageId, channel).catch(() => {});
   }
 }
 
@@ -100,12 +128,12 @@ function isImageUrl(url) {
 }
 
 // Send an image from a public URL
-async function sendImage(to, imageUrl, caption) {
+async function sendImage(to, imageUrl, caption, channel = 'primary') {
   try {
-    await axios.post(`${API}/${PHONE()}/messages`, {
+    await axios.post(`${API}/${PHONE(channel)}/messages`, {
       messaging_product: 'whatsapp', to, type: 'image',
       image: { link: imageUrl, caption: caption || '' }
-    }, { headers: HEADER() });
+    }, { headers: HEADER(channel) });
     console.log(`🖼️ Image sent to ${to}`);
   } catch (err) {
     console.error(`❌ Image send failed to ${to}:`, err.response?.data || err.message);
@@ -114,12 +142,12 @@ async function sendImage(to, imageUrl, caption) {
 }
 
 // Send a document (PDF/file) from a public URL
-async function sendDocument(to, fileUrl, filename, caption) {
+async function sendDocument(to, fileUrl, filename, caption, channel = 'primary') {
   try {
-    await axios.post(`${API}/${PHONE()}/messages`, {
+    await axios.post(`${API}/${PHONE(channel)}/messages`, {
       messaging_product: 'whatsapp', to, type: 'document',
       document: { link: fileUrl, filename: filename || 'document.pdf', caption: caption || '' }
-    }, { headers: HEADER() });
+    }, { headers: HEADER(channel) });
     console.log(`📎 Document sent to ${to}: ${filename}`);
   } catch (err) {
     console.error(`❌ Document send failed to ${to}:`, err.response?.data || err.message);
@@ -129,7 +157,9 @@ async function sendDocument(to, fileUrl, filename, caption) {
 
 // Upload a local file to Meta's media servers → returns media_id
 // Uses Node 18+ built-in FormData + Blob (no extra package needed)
-async function uploadMedia(filePath, mimeType, filename) {
+// NOTE: a media_id is scoped to the number it was uploaded through — it
+// must be uploaded and sent on the SAME channel.
+async function uploadMedia(filePath, mimeType, filename, channel = 'primary') {
   const fs = require('fs');
   const fileBuffer = fs.readFileSync(filePath);
   const blob = new Blob([fileBuffer], { type: mimeType });
@@ -137,27 +167,27 @@ async function uploadMedia(filePath, mimeType, filename) {
   form.append('messaging_product', 'whatsapp');
   form.append('type', mimeType);
   form.append('file', blob, filename || 'upload');
-  const r = await axios.post(`${API}/${PHONE()}/media`, form, {
-    headers: { Authorization: `Bearer ${TOKEN()}` }
+  const r = await axios.post(`${API}/${PHONE(channel)}/media`, form, {
+    headers: { Authorization: `Bearer ${TOKEN(channel)}` }
   });
   return r.data.id;
 }
 
 // Send document using Meta media_id (no public URL needed)
-async function sendDocumentById(to, mediaId, filename, caption) {
-  await axios.post(`${API}/${PHONE()}/messages`, {
+async function sendDocumentById(to, mediaId, filename, caption, channel = 'primary') {
+  await axios.post(`${API}/${PHONE(channel)}/messages`, {
     messaging_product: 'whatsapp', to, type: 'document',
     document: { id: mediaId, filename: filename || 'document.pdf', caption: caption || '' }
-  }, { headers: HEADER() });
+  }, { headers: HEADER(channel) });
   console.log(`📎 Document(id) sent to ${to}: ${filename}`);
 }
 
 // Send image using Meta media_id
-async function sendImageById(to, mediaId, caption) {
-  await axios.post(`${API}/${PHONE()}/messages`, {
+async function sendImageById(to, mediaId, caption, channel = 'primary') {
+  await axios.post(`${API}/${PHONE(channel)}/messages`, {
     messaging_product: 'whatsapp', to, type: 'image',
     image: { id: mediaId, caption: caption || '' }
-  }, { headers: HEADER() });
+  }, { headers: HEADER(channel) });
   console.log(`🖼️ Image(id) sent to ${to}`);
 }
 
@@ -166,7 +196,7 @@ async function sendImageById(to, mediaId, caption) {
 // templateName: approved template name (e.g. "dreamhome_intro")
 // languageCode: "en" or "en_US" or "hi"
 // params: array of strings for {{1}}, {{2}} etc. in the template body
-async function sendTemplate(to, templateName, languageCode = 'en', params = []) {
+async function sendTemplate(to, templateName, languageCode = 'en', params = [], channel = 'primary') {
   const components = [];
   if (params.length > 0) {
     components.push({
@@ -175,7 +205,7 @@ async function sendTemplate(to, templateName, languageCode = 'en', params = []) 
     });
   }
   try {
-    const res = await axios.post(`${API}/${PHONE()}/messages`, {
+    const res = await axios.post(`${API}/${PHONE(channel)}/messages`, {
       messaging_product: 'whatsapp',
       to,
       type: 'template',
@@ -184,7 +214,7 @@ async function sendTemplate(to, templateName, languageCode = 'en', params = []) 
         language: { code: languageCode },
         ...(components.length ? { components } : {})
       }
-    }, { headers: HEADER() });
+    }, { headers: HEADER(channel) });
     console.log(`📨 Template "${templateName}" sent to ${to}`);
     return res.data;
   } catch (err) {
@@ -193,4 +223,4 @@ async function sendTemplate(to, templateName, languageCode = 'en', params = []) 
   }
 }
 
-module.exports = { sendText, sendImage, sendDocument, sendDocumentById, sendImageById, uploadMedia, sendButtons, markRead, markReadWithTyping, alertSales, parseMessage, sendTemplate, isImageUrl };
+module.exports = { sendText, sendImage, sendDocument, sendDocumentById, sendImageById, uploadMedia, sendButtons, markRead, markReadWithTyping, alertSales, parseMessage, sendTemplate, isImageUrl, getChannels, isChannelConfigured, getWabaId };

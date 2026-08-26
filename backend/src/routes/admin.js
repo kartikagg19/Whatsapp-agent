@@ -9,7 +9,7 @@ const path     = require('path');
 const multer   = require('multer');
 const pdfParse = require('pdf-parse');
 const db       = require('../database');
-const { sendText, sendTemplate, sendDocument, sendImage, sendDocumentById, sendImageById, uploadMedia } = require('../whatsapp');
+const { sendText, sendTemplate, sendDocument, sendImage, sendDocumentById, sendImageById, uploadMedia, getChannels, isChannelConfigured, getWabaId } = require('../whatsapp');
 const { syncTimeline } = require('../crmClient');
 
 const diskStorage = multer.diskStorage({
@@ -248,11 +248,13 @@ router.get('/ai-test', async (req, res) => {
 });
 
 // GET /api/whatsapp-test — verify token + phone number ID are working
+// ?channel=primary|broadcast — defaults to primary
 router.get('/whatsapp-test', async (req, res) => {
   const axios = require('axios');
-  const token = process.env.WHATSAPP_TOKEN;
-  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-  if (!token || !phoneId) return res.json({ ok: false, error: 'WHATSAPP_TOKEN or WHATSAPP_PHONE_NUMBER_ID not set in env' });
+  const channel = req.query.channel || 'primary';
+  const token = channel === 'broadcast' ? process.env.WHATSAPP_TOKEN_2 : process.env.WHATSAPP_TOKEN;
+  const phoneId = channel === 'broadcast' ? process.env.WHATSAPP_PHONE_NUMBER_ID_2 : process.env.WHATSAPP_PHONE_NUMBER_ID;
+  if (!token || !phoneId) return res.json({ ok: false, error: `WHATSAPP_TOKEN${channel==='broadcast'?'_2':''} or WHATSAPP_PHONE_NUMBER_ID${channel==='broadcast'?'_2':''} not set in env` });
   try {
     const r = await axios.get(`https://graph.facebook.com/v20.0/${phoneId}`, {
       headers: { Authorization: `Bearer ${token}` }
@@ -540,7 +542,8 @@ router.post('/send', async (req, res) => {
       // Aliases for params/language in case CRM uses unprefixed names.
       params: bodyParams, language: bodyLanguage,
       // Campaign tag — pass "Day 1", "Day 2" etc. from your CRM
-      campaign
+      campaign,
+      channel = 'primary'
     } = req.body;
     const headerSecret = req.headers['x-webhook-secret'];
     const crmSecret = process.env.CRM_WEBHOOK_SECRET || '';
@@ -662,6 +665,7 @@ router.post('/send', async (req, res) => {
     // adjust before the send instead of letting Meta reject.
     if (useTemplate) {
       const resolved = await resolveTemplateArgs(
+        channel,
         resolvedTemplateName,
         resolvedTemplateLang,
         resolvedTemplateParams,
@@ -688,11 +692,11 @@ router.post('/send', async (req, res) => {
 
     try {
       if (useTemplate) {
-        await sendTemplate(normalizedPhone, resolvedTemplateName, resolvedTemplateLang, resolvedTemplateParams);
+        await sendTemplate(normalizedPhone, resolvedTemplateName, resolvedTemplateLang, resolvedTemplateParams, channel);
         metaSuccess = true;
         console.log(`✅ Template "${resolvedTemplateName}" sent to ${normalizedPhone}`);
       } else {
-        await sendText(normalizedPhone, message);
+        await sendText(normalizedPhone, message, channel);
         metaSuccess = true;
         console.log(`✅ Message sent to ${normalizedPhone} via Meta WhatsApp`);
       }
@@ -785,21 +789,29 @@ router.post('/send', async (req, res) => {
   }
 });
 
+// GET /api/channels — WhatsApp numbers configured on this backend, for the
+// dashboard's channel picker (broadcast/template sends can choose which
+// number to send from).
+router.get('/channels', (req, res) => {
+  res.json({ success: true, data: getChannels() });
+});
+
 // POST /api/broadcast — send to all leads in a tier
-// Body: { label: "WARM", message: "...", document_url: "...", image_url: "...", document_name: "brochure.pdf" }
+// Body: { label: "WARM", message: "...", document_url: "...", image_url: "...", document_name: "brochure.pdf", channel: "primary"|"broadcast" }
 router.post('/broadcast', async (req, res) => {
   try {
-    const { label, message, document_url, image_url, document_name, media_id, media_type, media_filename } = req.body;
+    const { label, message, document_url, image_url, document_name, media_id, media_type, media_filename, channel = 'primary' } = req.body;
     if (!label || !message) return res.status(400).json({ error: 'label and message required' });
+    if (!isChannelConfigured(channel)) return res.status(400).json({ error: `Channel "${channel}" is not configured` });
     const leads = (await db.getAllLeads()).filter(l => l.label === label.toUpperCase());
     let sent = 0, failed = 0;
     for (const lead of leads) {
       try {
-        await sendText(lead.phone, message);
-        if (media_id && media_type === 'image') await sendImageById(lead.phone, media_id);
-        else if (media_id) await sendDocumentById(lead.phone, media_id, media_filename || 'document.pdf');
-        else if (document_url) await sendDocument(lead.phone, document_url, document_name || 'document.pdf');
-        else if (image_url) await sendImage(lead.phone, image_url);
+        await sendText(lead.phone, message, channel);
+        if (media_id && media_type === 'image') await sendImageById(lead.phone, media_id, '', channel);
+        else if (media_id) await sendDocumentById(lead.phone, media_id, media_filename || 'document.pdf', '', channel);
+        else if (document_url) await sendDocument(lead.phone, document_url, document_name || 'document.pdf', '', channel);
+        else if (image_url) await sendImage(lead.phone, image_url, '', channel);
         const attachLabel = media_id ? ` [+${media_type==='image'?'Image':'PDF'}]` : document_url ? ' [+PDF]' : image_url ? ' [+Image]' : '';
         await db.saveMessage({ phone: lead.phone, role: 'assistant', message: `[BROADCAST] ${message}${attachLabel}` });
         sent++;
@@ -811,11 +823,14 @@ router.post('/broadcast', async (req, res) => {
 });
 
 // POST /api/upload-media — upload a file from dashboard to Meta servers → returns media_id
-// Accepts multipart/form-data with field "file"
+// Accepts multipart/form-data with field "file" and optional field "channel"
+// (media_id is scoped to the number it was uploaded through).
 router.post('/upload-media', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    const mediaId = await uploadMedia(req.file.path, req.file.mimetype, req.file.originalname);
+    const channel = req.body.channel || 'primary';
+    if (!isChannelConfigured(channel)) { fs.unlink(req.file.path, () => {}); return res.status(400).json({ error: `Channel "${channel}" is not configured` }); }
+    const mediaId = await uploadMedia(req.file.path, req.file.mimetype, req.file.originalname, channel);
     const type = req.file.mimetype.startsWith('image/') ? 'image' : 'document';
     res.json({ success: true, media_id: mediaId, type, filename: req.file.originalname });
     fs.unlink(req.file.path, () => {});
@@ -826,25 +841,25 @@ router.post('/upload-media', upload.single('file'), async (req, res) => {
 });
 
 // POST /api/send-media — send document or image to a single lead from dashboard
-// Body: { phone, media_id, type, filename, caption }
+// Body: { phone, media_id, type, filename, caption, channel }
 router.post('/send-media', async (req, res) => {
   try {
-    const { phone, media_id, type, filename, caption, document_url, image_url, document_name } = req.body;
+    const { phone, media_id, type, filename, caption, document_url, image_url, document_name, channel = 'primary' } = req.body;
     if (!phone) return res.status(400).json({ error: 'phone required' });
     const p = String(phone).replace(/\D/g, '');
     if (media_id) {
       if (type === 'image') {
-        await sendImageById(p, media_id, caption || '');
+        await sendImageById(p, media_id, caption || '', channel);
         await db.saveMessage({ phone: p, role: 'assistant', message: `[IMG] ${filename || 'image'}` });
       } else {
-        await sendDocumentById(p, media_id, filename || 'document.pdf', caption || '');
+        await sendDocumentById(p, media_id, filename || 'document.pdf', caption || '', channel);
         await db.saveMessage({ phone: p, role: 'assistant', message: `[DOC] ${filename || 'document.pdf'}` });
       }
     } else if (document_url) {
-      await sendDocument(p, document_url, document_name || 'document.pdf', caption || '');
+      await sendDocument(p, document_url, document_name || 'document.pdf', caption || '', channel);
       await db.saveMessage({ phone: p, role: 'assistant', message: `[DOC] ${document_url}` });
     } else if (image_url) {
-      await sendImage(p, image_url, caption || '');
+      await sendImage(p, image_url, caption || '', channel);
       await db.saveMessage({ phone: p, role: 'assistant', message: `[IMG] ${image_url}` });
     } else {
       return res.status(400).json({ error: 'media_id, document_url or image_url required' });
@@ -858,15 +873,17 @@ router.post('/send-media', async (req, res) => {
 // OR:   { phones: [...], template_name: "...", language: "en", params_map: {"919876543210": ["Rahul"], ...} }
 router.post('/broadcast-template', async (req, res) => {
   try {
-    const { phones, template_name, language = 'en', params = [], params_map = {}, campaign } = req.body;
+    const { phones, template_name, language = 'en', params = [], params_map = {}, campaign, channel = 'primary' } = req.body;
     if (!phones || !Array.isArray(phones) || phones.length === 0)
       return res.status(400).json({ error: 'phones array required' });
     if (!template_name)
       return res.status(400).json({ error: 'template_name required' });
+    if (!isChannelConfigured(channel))
+      return res.status(400).json({ error: `Channel "${channel}" is not configured` });
 
     // Resolve the template once for the global params — per-phone overrides
     // re-resolve below so each row gets correct padding.
-    const globalResolved = await resolveTemplateArgs(template_name, language, params, 'there');
+    const globalResolved = await resolveTemplateArgs(channel, template_name, language, params, 'there');
     if (globalResolved.lookupFailed) {
       console.warn(`⚠️  /broadcast-template: template "${template_name}" not in Meta cache; using requested lang="${language}" verbatim`);
     } else if (globalResolved.language !== language) {
@@ -883,10 +900,10 @@ router.post('/broadcast-template', async (req, res) => {
       // otherwise reuse the already-resolved global args (cheap, in-memory).
       const usePerPhone = rawParams !== params;
       const r = usePerPhone
-        ? await resolveTemplateArgs(template_name, language, rawParams, rawParams[0] || 'there')
+        ? await resolveTemplateArgs(channel, template_name, language, rawParams, rawParams[0] || 'there')
         : globalResolved;
       try {
-        await sendTemplate(phone, template_name, r.language, r.params);
+        await sendTemplate(phone, template_name, r.language, r.params, channel);
         await db.saveMessage({ phone, role: 'assistant', message: `[TEMPLATE:${template_name}] ${r.params.join(', ')}` });
         await db.upsertLead({ phone, name: rawParams[0] || 'Unknown', score: 3, label: 'COLD', intent: 'general', ...(campaign ? { campaign } : {}) });
         sent++;
@@ -919,19 +936,21 @@ router.post('/broadcast-template', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// In-memory cache of approved templates from Meta. Keyed by template
-// name → { language, paramCount }. Used by /api/send to self-heal when
-// the configured language or param count doesn't match what Meta expects.
-let templateCache = null;
-let templateCacheLoadedAt = 0;
+// In-memory cache of approved templates from Meta, one per channel (each
+// channel can be a different WABA with its own approved template set).
+// Keyed by template name → { language, paramCount }. Used by /api/send to
+// self-heal when the configured language or param count doesn't match
+// what Meta expects.
+const templateCaches = {}; // channel -> { cache: Map|null, loadedAt: number }
 const TEMPLATE_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
-async function fetchApprovedTemplates() {
+async function fetchApprovedTemplates(channel = 'primary') {
   const axios = require('axios');
-  const wabaId = process.env.WABA_ID || '';
-  if (!wabaId) return [];
+  const wabaId = getWabaId(channel);
+  const token = channel === 'broadcast' ? process.env.WHATSAPP_TOKEN_2 : process.env.WHATSAPP_TOKEN;
+  if (!wabaId || !token) return [];
   const r = await axios.get(`https://graph.facebook.com/v20.0/${wabaId}/message_templates`, {
-    headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` },
+    headers: { Authorization: `Bearer ${token}` },
     params: { fields: 'name,status,language,components', limit: 100 }
   });
   return (r.data.data || []).filter(t => t.status === 'APPROVED');
@@ -946,36 +965,40 @@ function countTemplateParams(template) {
   return matches ? matches.length : 0;
 }
 
-async function getCachedTemplateInfo(templateName) {
+async function getCachedTemplateInfo(channel, templateName) {
   const now = Date.now();
-  if (!templateCache || (now - templateCacheLoadedAt) > TEMPLATE_CACHE_TTL_MS) {
+  const slot = templateCaches[channel] || (templateCaches[channel] = { cache: null, loadedAt: 0 });
+  if (!slot.cache || (now - slot.loadedAt) > TEMPLATE_CACHE_TTL_MS) {
     try {
-      const approved = await fetchApprovedTemplates();
-      templateCache = new Map();
+      const approved = await fetchApprovedTemplates(channel);
+      slot.cache = new Map();
       for (const t of approved) {
         // A template name can have multiple language variants. Keep all of
         // them so /api/send can pick whichever language is asked for, with
         // any-language-as-fallback if the requested one isn't approved.
-        if (!templateCache.has(t.name)) templateCache.set(t.name, []);
-        templateCache.get(t.name).push({
+        if (!slot.cache.has(t.name)) slot.cache.set(t.name, []);
+        slot.cache.get(t.name).push({
           language: t.language,
           paramCount: countTemplateParams(t)
         });
       }
-      templateCacheLoadedAt = now;
-      console.log(`📋 Template cache refreshed: ${templateCache.size} unique names`);
+      slot.loadedAt = now;
+      console.log(`📋 Template cache refreshed (${channel}): ${slot.cache.size} unique names`);
     } catch (e) {
-      console.warn(`⚠️  Template cache refresh failed: ${e.message}`);
+      console.warn(`⚠️  Template cache refresh failed (${channel}): ${e.message}`);
       return null;
     }
   }
-  const variants = templateCache.get(templateName);
+  const variants = slot.cache.get(templateName);
   if (!variants || variants.length === 0) return null;
   return variants;
 }
 
 // Force a refresh (used by an admin endpoint if needed).
-function invalidateTemplateCache() { templateCache = null; templateCacheLoadedAt = 0; }
+function invalidateTemplateCache(channel) {
+  if (channel) delete templateCaches[channel];
+  else for (const k of Object.keys(templateCaches)) delete templateCaches[k];
+}
 
 /**
  * Self-heal template send arguments to match what Meta has actually approved.
@@ -990,8 +1013,8 @@ function invalidateTemplateCache() { templateCache = null; templateCacheLoadedAt
  *
  * Returns: { language, params, paramCount, lookupFailed, originalLang }
  */
-async function resolveTemplateArgs(templateName, requestedLang, params, padValue = 'there') {
-  const variants = await getCachedTemplateInfo(templateName);
+async function resolveTemplateArgs(channel, templateName, requestedLang, params, padValue = 'there') {
+  const variants = await getCachedTemplateInfo(channel, templateName);
   if (!variants || variants.length === 0) {
     return {
       language: requestedLang,
@@ -1024,11 +1047,13 @@ async function resolveTemplateArgs(templateName, requestedLang, params, padValue
 }
 
 // GET /api/templates — list approved WhatsApp templates from Meta
+// ?channel=primary|broadcast — defaults to primary
 router.get('/templates', async (req, res) => {
   try {
-    const wabaId = process.env.WABA_ID || '';
+    const channel = req.query.channel || 'primary';
+    const wabaId = getWabaId(channel);
     if (!wabaId) return res.json({ success: true, data: [] });
-    const approved = await fetchApprovedTemplates();
+    const approved = await fetchApprovedTemplates(channel);
     res.json({ success: true, data: approved });
   } catch (e) {
     res.json({ success: true, data: [] }); // non-fatal

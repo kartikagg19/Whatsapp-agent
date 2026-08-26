@@ -392,13 +392,14 @@ const LeadModal = ({lead,apiBase,isDemo,onClose,showToast}) => {
 };
 
 /* ─── BROADCAST MODAL ─────────────────────────────────────────── */
-const BroadcastModal = ({apiBase,isDemo,onClose,showToast,leads}) => {
+const BroadcastModal = ({apiBase,isDemo,onClose,showToast,leads,channels}) => {
   const [tier,setTier]=useState('WARM');
   const [msg,setMsg]=useState('');
   const [busy,setBusy]=useState(false);
   const [result,setResult]=useState(null);
   const [attachFile,setAttachFile]=useState(null);
   const [uploading,setUploading]=useState(false);
+  const [channel,setChannel]=useState((channels&&channels[0]&&channels[0].key)||'primary');
   const count=leads.filter(l=>l.label===tier).length;
   const templates=[
     {l:'Site Visit', m:'Ji! Is weekend site visits available hain. Kya main aapke liye slot book karoon?'},
@@ -410,7 +411,7 @@ const BroadcastModal = ({apiBase,isDemo,onClose,showToast,leads}) => {
     if(isDemo){showToast('Demo mode — connect backend to broadcast','err');return;}
     setBusy(true);setResult(null);
     try{
-      const body={label:tier,message:msg};
+      const body={label:tier,message:msg,channel};
       if(attachFile){body.media_id=attachFile.media_id;body.media_type=attachFile.type;body.media_filename=attachFile.filename;}
       const r=await apiFetch(`${apiBase}/broadcast`,{method:'POST',body:JSON.stringify(body)});
       const d=await r.json();
@@ -430,6 +431,12 @@ const BroadcastModal = ({apiBase,isDemo,onClose,showToast,leads}) => {
       ),
       h('div',{className:'modal-bd'},
         isDemo&&h('div',{className:'notice'},h('i',{className:'ti ti-info-circle'}),'Demo mode — connect backend to send real broadcasts.'),
+        channels&&channels.length>1&&h('div',{className:'form-field'},
+          h('label',{className:'form-label'},'Send from'),
+          h('div',{className:'chips'},
+            channels.map(c=>h('button',{key:c.key,className:`chip ${channel===c.key?'c-all':''}`,onClick:()=>{setChannel(c.key);setAttachFile(null);}},c.label))
+          )
+        ),
         h('div',{className:'form-field'},
           h('label',{className:'form-label'},'Target tier'),
           h('div',{className:'chips'},
@@ -458,7 +465,7 @@ const BroadcastModal = ({apiBase,isDemo,onClose,showToast,leads}) => {
                   if(isDemo){showToast('Demo mode','err');return;}
                   setUploading(true);
                   try{
-                    const fd=new FormData();fd.append('file',file);
+                    const fd=new FormData();fd.append('file',file);fd.append('channel',channel);
                     const r=await apiFetch(`${apiBase}/upload-media`,{method:'POST',body:fd});
                     const d=await r.json();
                     if(d.success){setAttachFile({media_id:d.media_id,type:d.type,filename:d.filename});showToast(`${d.filename} ready — will be sent to all ${count} leads`,'success');}
@@ -488,7 +495,7 @@ const BroadcastModal = ({apiBase,isDemo,onClose,showToast,leads}) => {
 };
 
 /* ─── TEMPLATE CAMPAIGN MODAL ─────────────────────────────────── */
-const TemplateCampaignModal = ({apiBase,isDemo,onClose,showToast}) => {
+const TemplateCampaignModal = ({apiBase,isDemo,onClose,showToast,channels}) => {
   const [phones,setPhones]=useState('');
   const [tmplName,setTmplName]=useState('');
   const [lang,setLang]=useState('en');
@@ -497,13 +504,15 @@ const TemplateCampaignModal = ({apiBase,isDemo,onClose,showToast}) => {
   const [busy,setBusy]=useState(false);
   const [result,setResult]=useState(null);
   const [templates,setTemplates]=useState([]);
+  const [channel,setChannel]=useState((channels&&channels[0]&&channels[0].key)||'primary');
 
   useEffect(()=>{
     if(isDemo||!apiBase||apiBase==='DEMO')return;
-    apiFetch(`${apiBase}/templates`).then(r=>r.json()).then(d=>{
+    setTemplates([]);setTmplName('');
+    apiFetch(`${apiBase}/templates?channel=${channel}`).then(r=>r.json()).then(d=>{
       if(d.success&&d.data.length) setTemplates(d.data);
     }).catch(()=>{});
-  },[apiBase,isDemo]);
+  },[apiBase,isDemo,channel]);
 
   function parsePhones(){
     return phones.split(/[\n,;]+/).map(p=>p.trim().replace(/\D/g,'')).filter(p=>p.length>=10);
@@ -517,7 +526,7 @@ const TemplateCampaignModal = ({apiBase,isDemo,onClose,showToast}) => {
     setBusy(true);setResult(null);
     try{
       const params=param1.trim()?[param1.trim()]:[];
-      const body={phones:list,template_name:tmplName.trim(),language:lang,params};
+      const body={phones:list,template_name:tmplName.trim(),language:lang,params,channel};
       if(campName.trim()) body.campaign=campName.trim();
       const r=await apiFetch(`${apiBase}/broadcast-template`,{method:'POST',body:JSON.stringify(body)});
       const d=await r.json();
@@ -543,6 +552,12 @@ const TemplateCampaignModal = ({apiBase,isDemo,onClose,showToast}) => {
         h('div',{className:'notice',style:{background:'#FFF8E1',borderColor:'#FFD54F',color:'#7C5700'}},
           h('i',{className:'ti ti-info-circle'}),
           'WhatsApp Rule: Free-form messages only deliver within 24h of user messaging you. For NEW numbers → use approved templates.'
+        ),
+        channels&&channels.length>1&&h('div',{className:'form-field'},
+          h('label',{className:'form-label'},'Send from'),
+          h('div',{className:'chips'},
+            channels.map(c=>h('button',{key:c.key,className:`chip ${channel===c.key?'c-all':''}`,onClick:()=>setChannel(c.key)},c.label))
+          )
         ),
         h('div',{className:'form-field'},
           h('label',{className:'form-label'},'Phone Numbers (one per line OR comma-separated)'),
@@ -868,7 +883,7 @@ function apiFetch(url, opts={}){
 }
 
 /* ─── LOGIN PAGE ──────────────────────────────────────────────── */
-const BACKEND_URL='https://whatsapp-agent-production-3525.up.railway.app/api';
+const BACKEND_URL='https://whatsapp-agent-k22r.onrender.com/api';
 const ACCESS_PASSWORD='8880';
 
 const LoginPage = ({onLogin}) => {
@@ -1263,7 +1278,7 @@ const AgentSettingsPage = ({apiBase,isDemo,showToast}) => {
         h('div',{style:{background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:'var(--r)',padding:'12px 14px'}},
           h('div',{style:{fontSize:'10.5px',fontWeight:'600',color:'var(--text3)',fontFamily:'var(--mono)',textTransform:'uppercase',letterSpacing:'0.07em',marginBottom:'8px'}},'CRM API Endpoint'),
           h('div',{style:{fontFamily:'var(--mono)',fontSize:'12px',color:'var(--text2)',lineHeight:'2'}},
-            h('div',null,h('strong',null,'URL: '),'POST ',h('code',{style:{background:'var(--surface3)',padding:'1px 5px',borderRadius:'3px'}},`${apiBase==='DEMO'?'https://your-app.railway.app/api':apiBase}/send`)),
+            h('div',null,h('strong',null,'URL: '),'POST ',h('code',{style:{background:'var(--surface3)',padding:'1px 5px',borderRadius:'3px'}},`${apiBase==='DEMO'?'https://your-app.onrender.com/api':apiBase}/send`)),
             h('div',null,h('strong',null,'New number: '),'just send ',h('code',{style:{background:'var(--surface3)',padding:'1px 5px',borderRadius:'3px'}},'{phone, message}'),' — template auto-applied'),
             h('div',null,h('strong',null,'Existing contact: '),'same call — free-form delivered')
           )
@@ -2478,8 +2493,16 @@ function App(){
   const [showTmpl, setTmpl]   =useState(false);
   const [showConn, setConn]   =useState(false);
   const [toast,    setToast]  =useState(null);
+  const [channels, setChannels]=useState([{key:'primary',label:'Primary (AI Agent)'}]);
   const isDemo=apiBase==='DEMO';
   const showToast=(msg,type='success')=>setToast({msg,type,id:Date.now()});
+
+  useEffect(()=>{
+    if(isDemo||!apiBase||apiBase==='DEMO')return;
+    apiFetch(`${apiBase}/channels`).then(r=>r.json()).then(d=>{
+      if(d.success&&d.data.length) setChannels(d.data);
+    }).catch(()=>{});
+  },[apiBase,isDemo]);
 
   const fetchData=useCallback(async()=>{
     if(isDemo){setLeads(DEMO_LEADS);setStats(DEMO_STATS);return;}
@@ -2574,8 +2597,8 @@ function App(){
       )
     ),
     selected  &&h(LeadModal,             {lead:selected,apiBase,isDemo,onClose:()=>setSelected(null),showToast}),
-    showBcast &&h(BroadcastModal,        {apiBase,isDemo,onClose:()=>setBcast(false),showToast,leads}),
-    showTmpl  &&h(TemplateCampaignModal, {apiBase,isDemo,onClose:()=>setTmpl(false),showToast}),
+    showBcast &&h(BroadcastModal,        {apiBase,isDemo,onClose:()=>setBcast(false),showToast,leads,channels}),
+    showTmpl  &&h(TemplateCampaignModal, {apiBase,isDemo,onClose:()=>setTmpl(false),showToast,channels}),
     showConn  &&h(ConnectModal,          {apiBase,setApiBase,onClose:()=>setConn(false),showToast}),
     toast     &&h(Toast,{key:toast.id,msg:toast.msg,type:toast.type,onDone:()=>setToast(null)})
   );

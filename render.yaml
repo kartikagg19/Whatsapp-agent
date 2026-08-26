@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: dreamhome-backend
+    env: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WEBHOOK_VERIFY_TOKEN
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SALES_PHONE_NUMBER
+        sync: false
+      - key: WABA_ID
+        sync: false
+      # Optional second number — broadcast/template sends only, no AI.
+      # Leave unset if you only have one WhatsApp number.
+      - key: WHATSAPP_TOKEN_2
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID_2
+        sync: false
+      - key: WABA_ID_2
+        sync: false
+      - key: WHATSAPP_2_LABEL
+        sync: false
+      - key: PORT
+        value: 3000
